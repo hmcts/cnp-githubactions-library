@@ -11,26 +11,23 @@ A reusable library of GitHub Actions workflows for HMCTS CNP (Cloud Native Platf
 - [Contributing](#contributing)
 - [License](#license)
 
-## 🚀 Available Workflows
+## 🚀 Available Workflows & Actions
 
 ### Container Build and Push
 
 Build and push container images to a container registry with support for multi-platform builds.
 
-**Features:**
-- Multi-platform build support (linux/amd64, linux/arm64, etc.)
-- Flexible authentication (inputs or secrets)
-- Docker BuildKit caching for faster builds
-- Customisable tags, build args, and context
+**Available in Two Formats:**
 
-📖 **[View full documentation](workflows/container-build-and-push.md)**
+#### 1. Reusable Workflow (Simple, Standardized)
+Perfect for straightforward builds with minimal customization.
 
-**Quick Example:**
+📖 **[View workflow documentation](.github/workflows/container-build-and-push.md)**
 
 ```yaml
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push.yaml@main
+    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push.yaml@main
     with:
       image-name: my-application
     secrets:
@@ -39,9 +36,57 @@ jobs:
       REGISTRY_PASSWORD: ${{ secrets.ACR_PASSWORD }}
 ```
 
+#### 2. Composite Action (Flexible, Extensible)
+Ideal when you need to add custom steps or integrate with other actions.
+
+📖 **[View action documentation](container-build-push/README.md)**
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run custom pre-build steps
+        run: npm test
+      
+      - name: Build and push
+        uses: hmcts/cnp-githubactions-library/container-build-push@main
+        with:
+          registry: myregistry.azurecr.io
+          registry-username: ${{ secrets.ACR_USERNAME }}
+          registry-password: ${{ secrets.ACR_PASSWORD }}
+          image-name: my-application
+      
+      - name: Run custom post-build steps
+        run: ./deploy.sh
+```
+
+**Features:**
+- Multi-platform build support (linux/amd64, linux/arm64, etc.)
+- Flexible authentication (inputs or secrets)
+- Docker BuildKit caching for faster builds
+- Customisable tags, build args, and context
+- Automatic metadata extraction
+- Detailed build summary output
+
+**Choosing Between Workflow and Action:**
+
+| Use Case | Reusable Workflow | Composite Action |
+|----------|-------------------|------------------|
+| Simple, standardized builds | ✅ | ⚠️ |
+| Built-in secret management | ✅ | ❌ |
+| Custom pre/post build steps | ❌ | ✅ |
+| Multiple images in one job | ❌ | ✅ |
+| Integration with other actions | ❌ | ✅ |
+| Matrix strategy builds | ❌ | ✅ |
+
 ## 📖 Usage
 
-To use these workflows in your repository:
+### Using Reusable Workflows
+
+To use a reusable workflow in your repository:
 
 1. Reference the workflow using the `uses` keyword in your workflow file
 2. Specify the version/branch after the `@` symbol (e.g., `@main`, `@v1.0.0`)
@@ -50,11 +95,35 @@ To use these workflows in your repository:
 ```yaml
 jobs:
   call-workflow:
-    uses: hmcts/cnp-githubactions-library/workflows/<workflow-name>.yaml@main
+    uses: hmcts/cnp-githubactions-library/.github/workflows/<workflow-name>.yaml@main
     with:
       # your inputs here
     secrets:
       # your secrets here
+```
+
+### Using Composite Actions
+
+To use a composite action in your workflow:
+
+1. Add it as a step within your job
+2. Provide required inputs directly
+3. Optionally use outputs in subsequent steps
+
+```yaml
+jobs:
+  your-job:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Your custom action
+        uses: hmcts/cnp-githubactions-library/<action-name>@main
+        with:
+          # your inputs here
+      
+      - name: Use outputs
+        run: echo "Result: ${{ steps.your-custom-action.outputs.result }}"
 ```
 
 ### Versioning
@@ -63,13 +132,18 @@ We recommend pinning to a specific version or commit SHA for production use:
 
 ```yaml
 # Pin to a specific tag
-uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push.yaml@v1.0.0
+uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push.yaml@v1.0.0
 
 # Pin to a specific commit
-uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push.yaml@abc123def
+uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push.yaml@abc123def
 
 # Use the latest from main (not recommended for production)
-uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push.yaml@main
+uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push.yaml@main
+```
+
+For composite actions:
+```yaml
+uses: hmcts/cnp-githubactions-library/container-build-push@v1.0.0
 ```
 
 ## 🤝 Contributing
@@ -82,16 +156,21 @@ Contributions are welcome! Please follow these guidelines:
 4. **Update documentation** if you're adding new features or changing behavior
 5. **Submit a pull request** with a clear description of your changes
 
-### Adding a New Workflow
+### Adding a New Workflow or Action
 
-When adding a new reusable workflow:
+When adding new reusable workflows:
 
-1. Place the workflow file in the `workflows/` directory
+1. Place the workflow file in the `.github/workflows/` directory
 2. Create a corresponding `.md` documentation file in the same directory
 3. Use the `workflow_call` trigger
-4. Document all inputs, secrets, and outputs clearly in the documentation file
-5. Add a summary and link to the README
-6. Follow GitHub Actions best practices for security and maintainability
+4. Update the main README with a summary and link
+
+When adding new composite actions:
+
+1. Create a new directory with a descriptive name
+2. Add an `action.yaml` file in that directory
+3. Create a comprehensive `README.md` with examples
+4. Update the main README with a summary and link
 
 ### Workflow Guidelines
 
