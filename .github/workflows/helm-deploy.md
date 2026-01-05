@@ -13,6 +13,8 @@ Deploy Helm charts to Azure AKS clusters with support for OCI dependencies and f
 - Azure AKS integration with service principal
 - OCI registry login for chart dependencies
 - Flexible values configuration (files, set, set-string)
+- Values template processing with `envsubst` for environment variable substitution
+- Subchart dependency updates for monorepo structures
 - Dry-run capability for testing deployments
 - Atomic deployments with automatic rollback on failure
 - Detailed deployment summary output
@@ -68,11 +70,11 @@ jobs:
 | `namespace` | Kubernetes namespace | No | `default` |
 | `chart` | Path to the Helm chart | **Yes** | - |
 | `values-files` | Comma-separated values files | No | - |
+| `values-template` | Path to values template file for `envsubst` processing | No | - |
+| `subchart-paths` | Glob pattern for subchart directories to update dependencies | No | - |
 | `set` | Set values (newline-delimited key=value) | No | - |
 | `set-string` | Set STRING values | No | - |
 | `timeout` | Timeout for Kubernetes operations | No | `5m0s` |
-| `atomic` | Roll back on failure | No | `true` |
-| `wait` | Wait for resources to be ready | No | `true` |
 | `dry-run` | Simulate deployment | No | `false` |
 | `oci-registry` | OCI registry URL | No | Uses `OCI_REGISTRY` secret |
 | `oci-username` | OCI registry username | No | Uses `OCI_USERNAME` secret |

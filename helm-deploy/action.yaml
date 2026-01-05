@@ -38,14 +38,6 @@ inputs:
     description: 'Time to wait for Kubernetes operations (e.g., 5m0s, 10m0s)'
     required: false
     default: '5m0s'
-  atomic:
-    description: 'If true, roll back on failure'
-    required: false
-    default: 'true'
-  wait:
-    description: 'Wait for resources to be ready before marking release as successful'
-    required: false
-    default: 'true'
   dry-run:
     description: 'Simulate deployment without making changes'
     required: false
@@ -60,6 +52,14 @@ inputs:
     default: ''
   oci-password:
     description: 'Password for OCI registry authentication'
+    required: false
+    default: ''
+  values-template:
+    description: 'Path to values template file for envsubst processing. The output file will be used as a values file.'
+    required: false
+    default: ''
+  subchart-paths:
+    description: 'Glob pattern for subchart directories to update dependencies before the main chart (e.g., apps/*/helm)'
     required: false
     default: ''
 
@@ -92,7 +92,6 @@ runs:
       with:
         resource-group: ${{ inputs.resource-group }}
         cluster-name: ${{ inputs.cluster-name }}
-        admin: 'false'
         use-kubelogin: 'true'
 
     - name: Set up Helm
@@ -110,6 +109,42 @@ runs:
             --password-stdin
         fi
 
+    - name: Process Values Template
+      id: values-template
+      if: inputs.values-template != ''
+      shell: bash
+      run: |
+        TEMPLATE="${{ inputs.values-template }}"
+        if [ ! -f "$TEMPLATE" ]; then
+          echo "::error::Values template file not found: $TEMPLATE"
+          exit 1
+        fi
+
+        # Generate output filename by removing .template from the name
+        OUTPUT="${TEMPLATE%.template.yaml}.yaml"
+        OUTPUT="${OUTPUT%.template.yml}.yml"
+        # If no .template was in the name, append .generated
+        if [ "$OUTPUT" == "$TEMPLATE" ]; then
+          OUTPUT="${TEMPLATE%.*}.generated.${TEMPLATE##*.}"
+        fi
+
+        echo "Processing values template: $TEMPLATE -> $OUTPUT"
+        envsubst < "$TEMPLATE" > "$OUTPUT"
+
+        echo "output-file=$OUTPUT" >> $GITHUB_OUTPUT
+
+    - name: Update Subchart Dependencies
+      if: inputs.subchart-paths != ''
+      shell: bash
+      run: |
+        echo "Updating subchart dependencies..."
+        for subchart in ${{ inputs.subchart-paths }}; do
+          if [ -f "$subchart/Chart.yaml" ]; then
+            echo "  Updating dependencies for: $subchart"
+            helm dependency update "$subchart"
+          fi
+        done
+
     - name: Update Helm Dependencies
       shell: bash
       run: |
@@ -120,6 +155,12 @@ runs:
       shell: bash
       run: |
         VALUES_ARGS=""
+
+        # Include generated template file if it exists
+        TEMPLATE_OUTPUT="${{ steps.values-template.outputs.output-file }}"
+        if [ -n "$TEMPLATE_OUTPUT" ] && [ -f "$TEMPLATE_OUTPUT" ]; then
+          VALUES_ARGS="-f $TEMPLATE_OUTPUT"
+        fi
 
         if [ -n "${{ inputs.values-files }}" ]; then
           IFS=',' read -ra FILES <<< "${{ inputs.values-files }}"
@@ -168,14 +209,7 @@ runs:
         HELM_CMD="helm upgrade --install ${{ inputs.release-name }} ${{ inputs.chart }}"
         HELM_CMD="$HELM_CMD --namespace ${{ inputs.namespace }}"
         HELM_CMD="$HELM_CMD --timeout ${{ inputs.timeout }}"
-
-        if [ "${{ inputs.atomic }}" == "true" ]; then
-          HELM_CMD="$HELM_CMD --atomic"
-        fi
-
-        if [ "${{ inputs.wait }}" == "true" ]; then
-          HELM_CMD="$HELM_CMD --wait"
-        fi
+        HELM_CMD="$HELM_CMD --atomic"
 
         if [ "${{ inputs.dry-run }}" == "true" ]; then
           HELM_CMD="$HELM_CMD --dry-run"

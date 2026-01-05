@@ -76,6 +76,11 @@ on:
         required: false
         type: string
         default: ''
+      admin:
+        description: 'Use admin credentials for AKS cluster'
+        required: false
+        type: boolean
+        default: false
       runner:
         description: 'GitHub runner to use'
         required: false
@@ -181,6 +186,7 @@ jobs:
           atomic: ${{ inputs.atomic }}
           wait: ${{ inputs.wait }}
           dry-run: ${{ inputs.dry-run }}
+          admin: ${{ inputs.admin }}
           oci-registry: ${{ steps.config-vars.outputs.oci-registry }}
           oci-username: ${{ steps.config-vars.outputs.oci-username }}
           oci-password: ${{ steps.config-vars.outputs.oci-password }}

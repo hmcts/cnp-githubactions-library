@@ -141,6 +141,8 @@ jobs:
 - Azure AKS authentication with service principal
 - OCI registry login for chart dependencies
 - Flexible values configuration (files, set, set-string)
+- Values template processing with `envsubst` for environment variable substitution
+- Subchart dependency updates for monorepo structures
 - Dry-run capability for testing deployments
 - Atomic deployments with automatic rollback
 - Detailed deployment summary output
