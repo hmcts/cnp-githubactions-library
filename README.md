@@ -82,6 +82,80 @@ jobs:
 | Integration with other actions | ❌ | ✅ |
 | Matrix strategy builds | ❌ | ✅ |
 
+### Helm Deploy
+
+Deploy Helm charts to Azure AKS clusters with support for OCI dependencies.
+
+**Available in Two Formats:**
+
+#### 1. Reusable Workflow (Simple, Standardised)
+Perfect for straightforward deployments with minimal customisation.
+
+📖 **[View workflow documentation](.github/workflows/helm-deploy.md)**
+
+```yaml
+jobs:
+  deploy:
+    uses: hmcts/cnp-githubactions-library/.github/workflows/helm-deploy.yaml@main
+    with:
+      release-name: my-application
+      namespace: production
+      chart: ./charts/my-app
+    secrets:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      AKS_CLUSTER_NAME: ${{ secrets.AKS_CLUSTER_NAME }}
+      AKS_RESOURCE_GROUP: ${{ secrets.AKS_RESOURCE_GROUP }}
+```
+
+#### 2. Composite Action (Flexible, Extensible)
+Ideal when you need to add custom steps or integrate with other actions.
+
+📖 **[View action documentation](helm-deploy/README.md)**
+
+```yaml
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run pre-deployment checks
+        run: ./scripts/pre-deploy.sh
+
+      - name: Deploy Helm chart
+        uses: hmcts/cnp-githubactions-library/helm-deploy@main
+        with:
+          cluster-name: my-aks-cluster
+          resource-group: my-resource-group
+          azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          release-name: my-application
+          namespace: production
+          chart: ./charts/my-app
+
+      - name: Run smoke tests
+        run: ./scripts/smoke-test.sh
+```
+
+**Features:**
+- Deploy Helm charts from local paths with OCI dependencies
+- Azure AKS authentication with service principal
+- OCI registry login for chart dependencies
+- Flexible values configuration (files, set, set-string)
+- Dry-run capability for testing deployments
+- Atomic deployments with automatic rollback
+- Detailed deployment summary output
+
+**Choosing Between Workflow and Action:**
+
+| Use Case | Reusable Workflow | Composite Action |
+|----------|-------------------|------------------|
+| Simple, standardised deployments | ✅ | ⚠️ |
+| Built-in secret management | ✅ | ❌ |
+| Custom pre/post deployment steps | ❌ | ✅ |
+| Multiple releases in one job | ❌ | ✅ |
+| Integration with other actions | ❌ | ✅ |
+| Matrix strategy deployments | ❌ | ✅ |
+
 ## 📖 Usage
 
 ### Using Reusable Workflows

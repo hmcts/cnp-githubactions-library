@@ -1,0 +1,230 @@
+name: 'Helm Deploy'
+description: 'Deploy Helm charts to Azure AKS clusters with support for OCI dependencies'
+author: 'HMCTS'
+
+inputs:
+  cluster-name:
+    description: 'Azure AKS cluster name'
+    required: true
+  resource-group:
+    description: 'Azure resource group containing the AKS cluster'
+    required: true
+  azure-credentials:
+    description: 'Azure service principal credentials (JSON format)'
+    required: true
+  release-name:
+    description: 'Helm release name'
+    required: true
+  namespace:
+    description: 'Kubernetes namespace for deployment'
+    required: false
+    default: 'default'
+  chart:
+    description: 'Path to the Helm chart (e.g., ./charts/my-app)'
+    required: true
+  values-files:
+    description: 'Comma-separated list of values files to use'
+    required: false
+    default: ''
+  set:
+    description: 'Set values on the command line (newline-delimited key=value pairs)'
+    required: false
+    default: ''
+  set-string:
+    description: 'Set STRING values on the command line (newline-delimited key=value pairs)'
+    required: false
+    default: ''
+  timeout:
+    description: 'Time to wait for Kubernetes operations (e.g., 5m0s, 10m0s)'
+    required: false
+    default: '5m0s'
+  atomic:
+    description: 'If true, roll back on failure'
+    required: false
+    default: 'true'
+  wait:
+    description: 'Wait for resources to be ready before marking release as successful'
+    required: false
+    default: 'true'
+  dry-run:
+    description: 'Simulate deployment without making changes'
+    required: false
+    default: 'false'
+  oci-registry:
+    description: 'OCI registry URL for chart dependencies (e.g., hmctspublic.azurecr.io)'
+    required: false
+    default: ''
+  oci-username:
+    description: 'Username for OCI registry authentication'
+    required: false
+    default: ''
+  oci-password:
+    description: 'Password for OCI registry authentication'
+    required: false
+    default: ''
+
+outputs:
+  release-revision:
+    description: 'Helm release revision number'
+    value: ${{ steps.deploy.outputs.revision }}
+  release-status:
+    description: 'Status of the Helm release (deployed, failed, etc.)'
+    value: ${{ steps.deploy.outputs.status }}
+  deployment-time:
+    description: 'Time taken for the deployment'
+    value: ${{ steps.deploy.outputs.deployment-time }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Azure Login
+      uses: azure/login@v2
+      with:
+        creds: ${{ inputs.azure-credentials }}
+
+    - name: Set up kubelogin for non-interactive login
+      uses: azure/use-kubelogin@v1
+      with:
+        kubelogin-version: 'v0.1.3'
+
+    - name: Get AKS Credentials
+      uses: azure/aks-set-context@v4
+      with:
+        resource-group: ${{ inputs.resource-group }}
+        cluster-name: ${{ inputs.cluster-name }}
+        admin: 'false'
+        use-kubelogin: 'true'
+
+    - name: Set up Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: 'v3.14.0'
+
+    - name: Login to OCI Registry
+      if: inputs.oci-registry != ''
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.oci-username }}" ] && [ -n "${{ inputs.oci-password }}" ]; then
+          echo "${{ inputs.oci-password }}" | helm registry login "${{ inputs.oci-registry }}" \
+            --username "${{ inputs.oci-username }}" \
+            --password-stdin
+        fi
+
+    - name: Update Helm Dependencies
+      shell: bash
+      run: |
+        helm dependency update "${{ inputs.chart }}"
+
+    - name: Prepare Values Files
+      id: values
+      shell: bash
+      run: |
+        VALUES_ARGS=""
+
+        if [ -n "${{ inputs.values-files }}" ]; then
+          IFS=',' read -ra FILES <<< "${{ inputs.values-files }}"
+          for file in "${FILES[@]}"; do
+            file=$(echo "$file" | xargs)
+            if [ -f "$file" ]; then
+              VALUES_ARGS="$VALUES_ARGS -f $file"
+            else
+              echo "::warning::Values file not found: $file"
+            fi
+          done
+        fi
+
+        echo "values-args=$VALUES_ARGS" >> $GITHUB_OUTPUT
+
+    - name: Prepare Set Arguments
+      id: set-args
+      shell: bash
+      run: |
+        SET_ARGS=""
+
+        if [ -n "${{ inputs.set }}" ]; then
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then
+              SET_ARGS="$SET_ARGS --set $line"
+            fi
+          done <<< "${{ inputs.set }}"
+        fi
+
+        if [ -n "${{ inputs.set-string }}" ]; then
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then
+              SET_ARGS="$SET_ARGS --set-string $line"
+            fi
+          done <<< "${{ inputs.set-string }}"
+        fi
+
+        echo "set-args=$SET_ARGS" >> $GITHUB_OUTPUT
+
+    - name: Deploy Helm Chart
+      id: deploy
+      shell: bash
+      run: |
+        START_TIME=$(date +%s)
+
+        HELM_CMD="helm upgrade --install ${{ inputs.release-name }} ${{ inputs.chart }}"
+        HELM_CMD="$HELM_CMD --namespace ${{ inputs.namespace }}"
+        HELM_CMD="$HELM_CMD --timeout ${{ inputs.timeout }}"
+
+        if [ "${{ inputs.atomic }}" == "true" ]; then
+          HELM_CMD="$HELM_CMD --atomic"
+        fi
+
+        if [ "${{ inputs.wait }}" == "true" ]; then
+          HELM_CMD="$HELM_CMD --wait"
+        fi
+
+        if [ "${{ inputs.dry-run }}" == "true" ]; then
+          HELM_CMD="$HELM_CMD --dry-run"
+        fi
+
+        HELM_CMD="$HELM_CMD ${{ steps.values.outputs.values-args }}"
+        HELM_CMD="$HELM_CMD ${{ steps.set-args.outputs.set-args }}"
+
+        echo "Executing: $HELM_CMD"
+
+        if eval $HELM_CMD; then
+          DEPLOY_STATUS="success"
+        else
+          DEPLOY_STATUS="failed"
+        fi
+
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+
+        if [ "${{ inputs.dry-run }}" != "true" ]; then
+          RELEASE_INFO=$(helm status ${{ inputs.release-name }} -n ${{ inputs.namespace }} -o json 2>/dev/null || echo '{}')
+          REVISION=$(echo "$RELEASE_INFO" | jq -r '.version // "N/A"')
+          STATUS=$(echo "$RELEASE_INFO" | jq -r '.info.status // "unknown"')
+        else
+          REVISION="dry-run"
+          STATUS="dry-run"
+        fi
+
+        echo "revision=$REVISION" >> $GITHUB_OUTPUT
+        echo "status=$STATUS" >> $GITHUB_OUTPUT
+        echo "deployment-time=${DURATION}s" >> $GITHUB_OUTPUT
+
+        if [ "$DEPLOY_STATUS" == "failed" ]; then
+          exit 1
+        fi
+
+    - name: Output Deployment Summary
+      shell: bash
+      run: |
+        echo "### Helm Deployment Summary :rocket:" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Release:** \`${{ inputs.release-name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Namespace:** \`${{ inputs.namespace }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Chart:** \`${{ inputs.chart }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Cluster:** \`${{ inputs.cluster-name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Revision:** \`${{ steps.deploy.outputs.revision }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Status:** \`${{ steps.deploy.outputs.status }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Duration:** \`${{ steps.deploy.outputs.deployment-time }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ inputs.dry-run }}" == "true" ]; then
+          echo "> :information_source: **This was a dry-run deployment. No changes were made.**" >> $GITHUB_STEP_SUMMARY
+        fi
