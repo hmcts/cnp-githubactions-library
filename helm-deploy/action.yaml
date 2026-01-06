@@ -4,7 +4,7 @@ author: 'HMCTS'
 
 inputs:
   environment:
-    description: 'Azure environment name (e.g., cft-preview). Cluster and resource group are derived as {environment}-01-aks and {environment}-01-rg'
+    description: 'Azure environment prefix (e.g., cft-preview-01, cft-aat-00). Cluster and resource group are derived as {environment}-aks and {environment}-rg'
     required: true
   azure-credentials:
     description: 'Azure service principal credentials (JSON format)'
@@ -82,8 +82,8 @@ runs:
     - name: Get AKS Credentials
       uses: azure/aks-set-context@v4
       with:
-        resource-group: ${{ inputs.environment }}-01-rg
-        cluster-name: ${{ inputs.environment }}-01-aks
+        resource-group: ${{ inputs.environment }}-rg
+        cluster-name: ${{ inputs.environment }}-aks
         admin: 'true'
 
     - name: Set up Helm

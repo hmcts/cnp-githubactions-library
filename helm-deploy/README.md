@@ -27,7 +27,7 @@ steps:
   - name: Deploy Helm chart
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
-      environment: cft-preview
+      environment: cft-preview-01
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
       namespace: my-team
@@ -44,7 +44,7 @@ steps:
   - name: Deploy Helm chart
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
-      environment: cft-preview
+      environment: cft-preview-01
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app-pr-123
       namespace: my-team
@@ -72,7 +72,7 @@ steps:
   - name: Deploy Helm chart
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
-      environment: cft-preview
+      environment: cft-preview-01
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
       namespace: my-team
@@ -97,7 +97,7 @@ steps:
       WEB_IMAGE: pr-123-abc1234
       API_IMAGE: pr-123-abc1234
     with:
-      environment: cft-preview
+      environment: cft-preview-01
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
       namespace: my-team
@@ -119,7 +119,7 @@ steps:
   - name: Deploy Helm chart
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
-      environment: cft-preview
+      environment: cft-preview-01
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
       namespace: my-team
@@ -140,7 +140,7 @@ steps:
   - name: Test deployment (dry-run)
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
-      environment: cft-preview
+      environment: cft-preview-01
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
       namespace: my-team
@@ -152,7 +152,7 @@ steps:
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `environment` | Azure environment name (e.g., `cft-preview`). Cluster and resource group are derived as `{environment}-01-aks` and `{environment}-01-rg` | **Yes** | - |
+| `environment` | Azure environment prefix (e.g., `cft-preview-01`, `cft-aat-00`). Cluster and resource group are derived as `{environment}-aks` and `{environment}-rg` | **Yes** | - |
 | `azure-credentials` | Azure service principal credentials (JSON format) | **Yes** | - |
 | `release-name` | Helm release name | **Yes** | - |
 | `namespace` | Kubernetes namespace for deployment | No | `default` |
@@ -161,7 +161,7 @@ steps:
 | `values-template` | Path to values template file for `envsubst` processing | No | - |
 | `subchart-paths` | Glob pattern for subchart directories to update dependencies (e.g., `apps/*/helm`) | No | - |
 | `set` | Set values (newline-delimited key=value pairs, e.g., `global.environment=aat`) | No | - |
-| `set-string` | Set STRING values - forces string type (newline-delimited, use when value might be interpreted as number/bool) | No | - |
+| `set-string` | Set STRING values (newline-delimited key=value pairs, e.g., `java.image=${{ github.sha }}`) | No | - |
 | `timeout` | Time to wait for Kubernetes operations | No | `5m0s` |
 | `dry-run` | Simulate deployment without making changes | No | `false` |
 | `oci-registry` | OCI registry URL for chart dependencies | No | - |
@@ -198,10 +198,10 @@ jobs:
         id: env
         run: |
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "environment=cft-aat" >> $GITHUB_OUTPUT
+            echo "environment=cft-aat-00" >> $GITHUB_OUTPUT
             echo "namespace=my-team" >> $GITHUB_OUTPUT
           else
-            echo "environment=cft-preview" >> $GITHUB_OUTPUT
+            echo "environment=cft-preview-01" >> $GITHUB_OUTPUT
             echo "namespace=my-team" >> $GITHUB_OUTPUT
           fi
 
