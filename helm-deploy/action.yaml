@@ -3,11 +3,8 @@ description: 'Deploy Helm charts to Azure AKS clusters with support for OCI depe
 author: 'HMCTS'
 
 inputs:
-  cluster-name:
-    description: 'Azure AKS cluster name'
-    required: true
-  resource-group:
-    description: 'Azure resource group containing the AKS cluster'
+  environment:
+    description: 'Azure environment name (e.g., cft-preview). Cluster and resource group are derived as {environment}-01-aks and {environment}-01-rg'
     required: true
   azure-credentials:
     description: 'Azure service principal credentials (JSON format)'
@@ -85,8 +82,8 @@ runs:
     - name: Get AKS Credentials
       uses: azure/aks-set-context@v4
       with:
-        resource-group: ${{ inputs.resource-group }}
-        cluster-name: ${{ inputs.cluster-name }}
+        resource-group: ${{ inputs.environment }}-01-rg
+        cluster-name: ${{ inputs.environment }}-01-aks
         admin: 'true'
 
     - name: Set up Helm
@@ -249,7 +246,7 @@ runs:
         echo "**Release:** \`${{ inputs.release-name }}\`" >> $GITHUB_STEP_SUMMARY
         echo "**Namespace:** \`${{ inputs.namespace }}\`" >> $GITHUB_STEP_SUMMARY
         echo "**Chart:** \`${{ inputs.chart }}\`" >> $GITHUB_STEP_SUMMARY
-        echo "**Cluster:** \`${{ inputs.cluster-name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** \`${{ inputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
         echo "**Revision:** \`${{ steps.deploy.outputs.revision }}\`" >> $GITHUB_STEP_SUMMARY
         echo "**Status:** \`${{ steps.deploy.outputs.status }}\`" >> $GITHUB_STEP_SUMMARY
         echo "**Duration:** \`${{ steps.deploy.outputs.deployment-time }}\`" >> $GITHUB_STEP_SUMMARY
