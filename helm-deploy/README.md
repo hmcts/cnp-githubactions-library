@@ -34,7 +34,7 @@ steps:
       chart: ./charts/my-app
 ```
 
-### Deploy with Values Files
+### Deploy with Values Files and Set
 
 ```yaml
 steps:
@@ -46,15 +46,20 @@ steps:
     with:
       environment: cft-preview
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
-      release-name: my-app
+      release-name: my-app-pr-123
       namespace: my-team
-      chart: ./charts/my-app
-      values-files: charts/my-app/values.yaml,charts/my-app/values.preview.yaml
+      chart: ./helm/my-app
+      values-files: helm/my-app/values.yaml,helm/my-app/values.preview.yaml
       set: |
-        global.environment=preview
+        global.tenantId=531ff96d-0ae9-462a-8d2d-bec7c0b42082
+        global.environment=aat
         global.enableKeyVaults=true
-      set-string: |
-        nodejs.image=hmctspublic.azurecr.io/my-app:pr-123-abc1234
+        global.devMode=true
+        global.tags.teamName=my-team
+        global.tags.applicationName=my-app
+        global.tags.builtFrom=https://github.com/hmcts/my-app
+        global.tags.businessArea=CFT
+        global.tags.environment=development
 ```
 
 ### Deploy with OCI Dependencies
@@ -155,8 +160,8 @@ steps:
 | `values-files` | Comma-separated list of values files (e.g., `charts/my-app/values.yaml,charts/my-app/values.preview.yaml`) | No | - |
 | `values-template` | Path to values template file for `envsubst` processing | No | - |
 | `subchart-paths` | Glob pattern for subchart directories to update dependencies (e.g., `apps/*/helm`) | No | - |
-| `set` | Set values (newline-delimited key=value pairs) | No | - |
-| `set-string` | Set STRING values (newline-delimited key=value pairs, e.g., `nodejs.image=hmctspublic.azurecr.io/app:tag`) | No | - |
+| `set` | Set values (newline-delimited key=value pairs, e.g., `global.environment=aat`) | No | - |
+| `set-string` | Set STRING values - forces string type (newline-delimited, use when value might be interpreted as number/bool) | No | - |
 | `timeout` | Time to wait for Kubernetes operations | No | `5m0s` |
 | `dry-run` | Simulate deployment without making changes | No | `false` |
 | `oci-registry` | OCI registry URL for chart dependencies | No | - |
@@ -207,10 +212,12 @@ jobs:
           azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
           release-name: my-app
           namespace: ${{ steps.env.outputs.namespace }}
-          chart: ./charts/my-app
-          values-files: charts/my-app/values.yaml,charts/my-app/values.preview.yaml
-          set-string: |
-            nodejs.image=hmctspublic.azurecr.io/my-app:${{ github.sha }}
+          chart: ./helm/my-app
+          values-template: ./helm/my-app/values.preview.template.yaml
+          set: |
+            global.environment=aat
+            global.enableKeyVaults=true
+            global.tags.teamName=${{ steps.env.outputs.namespace }}
           oci-registry: hmctspublic.azurecr.io
           oci-username: ${{ secrets.ACR_USERNAME }}
           oci-password: ${{ secrets.ACR_PASSWORD }}
