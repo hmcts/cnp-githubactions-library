@@ -27,11 +27,10 @@ steps:
   - name: Deploy Helm chart
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
-      cluster-name: my-aks-cluster
-      resource-group: my-resource-group
+      environment: cft-preview
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
-      namespace: production
+      namespace: my-team
       chart: ./charts/my-app
 ```
 
@@ -45,18 +44,17 @@ steps:
   - name: Deploy Helm chart
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
-      cluster-name: my-aks-cluster
-      resource-group: my-resource-group
+      environment: cft-preview
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
-      namespace: production
+      namespace: my-team
       chart: ./charts/my-app
-      values-files: charts/my-app/values.yaml,charts/my-app/values.prod.yaml
+      values-files: charts/my-app/values.yaml,charts/my-app/values.preview.yaml
       set: |
-        global.environment=production
-        ingress.enabled=true
+        global.environment=preview
+        global.enableKeyVaults=true
       set-string: |
-        image=${{ github.sha }}
+        nodejs.image=hmctspublic.azurecr.io/my-app:pr-123-abc1234
 ```
 
 ### Deploy with OCI Dependencies
@@ -69,11 +67,10 @@ steps:
   - name: Deploy Helm chart
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
-      cluster-name: my-aks-cluster
-      resource-group: my-resource-group
+      environment: cft-preview
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
-      namespace: production
+      namespace: my-team
       chart: ./charts/my-app
       oci-registry: hmctspublic.azurecr.io
       oci-username: ${{ secrets.ACR_USERNAME }}
@@ -92,19 +89,18 @@ steps:
   - name: Deploy Helm chart
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     env:
-      IMAGE_TAG: ${{ github.sha }}
-      REPLICAS: "3"
+      WEB_IMAGE: pr-123-abc1234
+      API_IMAGE: pr-123-abc1234
     with:
-      cluster-name: my-aks-cluster
-      resource-group: my-resource-group
+      environment: cft-preview
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
-      namespace: production
+      namespace: my-team
       chart: ./charts/my-app
       values-template: ./charts/my-app/values.preview.template.yaml
 ```
 
-The template file can contain environment variables like `${IMAGE_TAG}` which will be substituted.
+The template file can contain environment variables like `${WEB_IMAGE}` which will be substituted.
 
 ### Deploy Monorepo with Subcharts
 
@@ -118,11 +114,10 @@ steps:
   - name: Deploy Helm chart
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
-      cluster-name: my-aks-cluster
-      resource-group: my-resource-group
+      environment: cft-preview
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
-      namespace: production
+      namespace: my-team
       chart: ./helm/my-app
       subchart-paths: apps/*/helm
       oci-registry: hmctspublic.azurecr.io
@@ -140,11 +135,10 @@ steps:
   - name: Test deployment (dry-run)
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
-      cluster-name: my-aks-cluster
-      resource-group: my-resource-group
+      environment: cft-preview
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
-      namespace: staging
+      namespace: my-team
       chart: ./charts/my-app
       dry-run: 'true'
 ```
@@ -153,17 +147,16 @@ steps:
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `cluster-name` | Azure AKS cluster name | **Yes** | - |
-| `resource-group` | Azure resource group containing the AKS cluster | **Yes** | - |
+| `environment` | Azure environment name (e.g., `cft-preview`). Cluster and resource group are derived as `{environment}-01-aks` and `{environment}-01-rg` | **Yes** | - |
 | `azure-credentials` | Azure service principal credentials (JSON format) | **Yes** | - |
 | `release-name` | Helm release name | **Yes** | - |
 | `namespace` | Kubernetes namespace for deployment | No | `default` |
 | `chart` | Path to the Helm chart (e.g., `./charts/my-app`) | **Yes** | - |
-| `values-files` | Comma-separated list of values files | No | - |
+| `values-files` | Comma-separated list of values files (e.g., `charts/my-app/values.yaml,charts/my-app/values.preview.yaml`) | No | - |
 | `values-template` | Path to values template file for `envsubst` processing | No | - |
 | `subchart-paths` | Glob pattern for subchart directories to update dependencies (e.g., `apps/*/helm`) | No | - |
 | `set` | Set values (newline-delimited key=value pairs) | No | - |
-| `set-string` | Set STRING values (newline-delimited key=value pairs) | No | - |
+| `set-string` | Set STRING values (newline-delimited key=value pairs, e.g., `nodejs.image=hmctspublic.azurecr.io/app:tag`) | No | - |
 | `timeout` | Time to wait for Kubernetes operations | No | `5m0s` |
 | `dry-run` | Simulate deployment without making changes | No | `false` |
 | `oci-registry` | OCI registry URL for chart dependencies | No | - |
@@ -200,25 +193,24 @@ jobs:
         id: env
         run: |
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "env=production" >> $GITHUB_OUTPUT
-            echo "namespace=prod" >> $GITHUB_OUTPUT
+            echo "environment=cft-aat" >> $GITHUB_OUTPUT
+            echo "namespace=my-team" >> $GITHUB_OUTPUT
           else
-            echo "env=staging" >> $GITHUB_OUTPUT
-            echo "namespace=staging" >> $GITHUB_OUTPUT
+            echo "environment=cft-preview" >> $GITHUB_OUTPUT
+            echo "namespace=my-team" >> $GITHUB_OUTPUT
           fi
 
-      - name: Deploy to ${{ steps.env.outputs.env }}
+      - name: Deploy to ${{ steps.env.outputs.environment }}
         uses: hmcts/cnp-githubactions-library/helm-deploy@main
         with:
-          cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
-          resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+          environment: ${{ steps.env.outputs.environment }}
           azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
           release-name: my-app
           namespace: ${{ steps.env.outputs.namespace }}
           chart: ./charts/my-app
-          values-files: charts/my-app/values.yaml,charts/my-app/values.${{ steps.env.outputs.env }}.yaml
+          values-files: charts/my-app/values.yaml,charts/my-app/values.preview.yaml
           set-string: |
-            java.image=${{ github.sha }}
+            nodejs.image=hmctspublic.azurecr.io/my-app:${{ github.sha }}
           oci-registry: hmctspublic.azurecr.io
           oci-username: ${{ secrets.ACR_USERNAME }}
           oci-password: ${{ secrets.ACR_PASSWORD }}
@@ -231,11 +223,10 @@ jobs:
   id: deploy
   uses: hmcts/cnp-githubactions-library/helm-deploy@main
   with:
-    cluster-name: my-aks-cluster
-    resource-group: my-resource-group
+    environment: cft-preview
     azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
     release-name: my-app
-    namespace: production
+    namespace: my-team
     chart: ./charts/my-app
 
 - name: Notify deployment
