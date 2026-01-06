@@ -34,7 +34,7 @@ steps:
       chart: ./charts/my-app
 ```
 
-### Deploy with Values Files and Set
+### Deploy
 
 ```yaml
 steps:
