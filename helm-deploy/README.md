@@ -28,13 +28,15 @@ steps:
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
       environment: cft-preview-01
+      team-name: my-team
+      application-name: my-app
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
       namespace: my-team
       chart: ./charts/my-app
 ```
 
-### Deploy
+### Deploy with Values Files
 
 ```yaml
 steps:
@@ -45,21 +47,13 @@ steps:
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
       environment: cft-preview-01
+      team-name: my-team
+      application-name: my-app
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app-pr-123
       namespace: my-team
       chart: ./helm/my-app
       values-files: helm/my-app/values.yaml,helm/my-app/values.preview.yaml
-      set: |
-        global.tenantId=531ff96d-0ae9-462a-8d2d-bec7c0b42082
-        global.environment=aat
-        global.enableKeyVaults=true
-        global.devMode=true
-        global.tags.teamName=my-team
-        global.tags.applicationName=my-app
-        global.tags.builtFrom=https://github.com/hmcts/my-app
-        global.tags.businessArea=CFT
-        global.tags.environment=development
 ```
 
 ### Deploy with OCI Dependencies
@@ -73,6 +67,8 @@ steps:
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
       environment: cft-preview-01
+      team-name: my-team
+      application-name: my-app
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
       namespace: my-team
@@ -98,6 +94,8 @@ steps:
       API_IMAGE: pr-123-abc1234
     with:
       environment: cft-preview-01
+      team-name: my-team
+      application-name: my-app
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
       namespace: my-team
@@ -120,6 +118,8 @@ steps:
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
       environment: cft-preview-01
+      team-name: my-team
+      application-name: my-app
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
       namespace: my-team
@@ -141,6 +141,8 @@ steps:
     uses: hmcts/cnp-githubactions-library/helm-deploy@main
     with:
       environment: cft-preview-01
+      team-name: my-team
+      application-name: my-app
       azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
       release-name: my-app
       namespace: my-team
@@ -153,6 +155,8 @@ steps:
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `environment` | Azure environment prefix (e.g., `cft-preview-01`, `cft-aat-00`). Cluster and resource group are derived as `{environment}-aks` and `{environment}-rg` | **Yes** | - |
+| `team-name` | Team name for Azure resource tagging (`global.tags.teamName`) | **Yes** | - |
+| `application-name` | Application name for Azure resource tagging (`global.tags.applicationName`) | **Yes** | - |
 | `azure-credentials` | Azure service principal credentials (JSON format) | **Yes** | - |
 | `release-name` | Helm release name | **Yes** | - |
 | `namespace` | Kubernetes namespace for deployment | No | `default` |
@@ -160,13 +164,29 @@ steps:
 | `values-files` | Comma-separated list of values files (e.g., `charts/my-app/values.yaml,charts/my-app/values.preview.yaml`) | No | - |
 | `values-template` | Path to values template file for `envsubst` processing | No | - |
 | `subchart-paths` | Glob pattern for subchart directories to update dependencies (e.g., `apps/*/helm`) | No | - |
-| `set` | Set values (newline-delimited key=value pairs, e.g., `global.environment=aat`) | No | - |
+| `set` | Set values (newline-delimited key=value pairs) - can override HMCTS defaults | No | - |
 | `set-string` | Set STRING values (newline-delimited key=value pairs, e.g., `java.image=${{ github.sha }}`) | No | - |
 | `timeout` | Time to wait for Kubernetes operations | No | `5m0s` |
 | `dry-run` | Simulate deployment without making changes | No | `false` |
 | `oci-registry` | OCI registry URL for chart dependencies | No | - |
 | `oci-username` | Username for OCI registry authentication | No | - |
 | `oci-password` | Password for OCI registry authentication | No | - |
+
+## HMCTS Global Values
+
+This action automatically sets the following HMCTS-specific Helm values. These are applied before any user-provided `set` values, so they can be overridden if needed.
+
+| Value | Source | Description |
+|-------|--------|-------------|
+| `global.tenantId` | Hardcoded | HMCTS Azure tenant ID |
+| `global.environment` | Hardcoded | Always `aat` for non-production |
+| `global.enableKeyVaults` | Hardcoded | Always `true` |
+| `global.disableTraefikTls` | Hardcoded | Always `false` |
+| `global.tags.teamName` | Input | From `team-name` input |
+| `global.tags.applicationName` | Input | From `application-name` input |
+| `global.tags.builtFrom` | Auto | GitHub repository URL |
+| `global.tags.businessArea` | Hardcoded | Always `CFT` |
+| `global.tags.environment` | Hardcoded | Always `aat` |
 
 ## Outputs
 
@@ -199,25 +219,21 @@ jobs:
         run: |
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "environment=cft-aat-00" >> $GITHUB_OUTPUT
-            echo "namespace=my-team" >> $GITHUB_OUTPUT
           else
             echo "environment=cft-preview-01" >> $GITHUB_OUTPUT
-            echo "namespace=my-team" >> $GITHUB_OUTPUT
           fi
 
       - name: Deploy to ${{ steps.env.outputs.environment }}
         uses: hmcts/cnp-githubactions-library/helm-deploy@main
         with:
           environment: ${{ steps.env.outputs.environment }}
+          team-name: my-team
+          application-name: my-app
           azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
           release-name: my-app
-          namespace: ${{ steps.env.outputs.namespace }}
+          namespace: my-team
           chart: ./helm/my-app
           values-template: ./helm/my-app/values.preview.template.yaml
-          set: |
-            global.environment=aat
-            global.enableKeyVaults=true
-            global.tags.teamName=${{ steps.env.outputs.namespace }}
           oci-registry: hmctspublic.azurecr.io
           oci-username: ${{ secrets.ACR_USERNAME }}
           oci-password: ${{ secrets.ACR_PASSWORD }}
@@ -230,7 +246,9 @@ jobs:
   id: deploy
   uses: hmcts/cnp-githubactions-library/helm-deploy@main
   with:
-    environment: cft-preview
+    environment: cft-preview-01
+    team-name: my-team
+    application-name: my-app
     azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
     release-name: my-app
     namespace: my-team

@@ -6,6 +6,12 @@ inputs:
   environment:
     description: 'Azure environment prefix (e.g., cft-preview-01, cft-aat-00). Cluster and resource group are derived as {environment}-aks and {environment}-rg'
     required: true
+  team-name:
+    description: 'Team name for Azure resource tagging (global.tags.teamName)'
+    required: true
+  application-name:
+    description: 'Application name for Azure resource tagging (global.tags.applicationName)'
+    required: true
   azure-credentials:
     description: 'Azure service principal credentials (JSON format)'
     required: true
@@ -168,12 +174,35 @@ runs:
 
         echo "values-args=$VALUES_ARGS" >> $GITHUB_OUTPUT
 
+    - name: Prepare HMCTS Global Values
+      id: hmcts-values
+      shell: bash
+      env:
+        GITHUB_SERVER_URL: ${{ github.server_url }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: |
+        # Build HMCTS-specific global values for Helm
+        HMCTS_SET=""
+        HMCTS_SET="$HMCTS_SET --set global.tenantId=531ff96d-0ae9-462a-8d2d-bec7c0b42082"
+        HMCTS_SET="$HMCTS_SET --set global.environment=aat"
+        HMCTS_SET="$HMCTS_SET --set global.enableKeyVaults=true"
+        HMCTS_SET="$HMCTS_SET --set global.disableTraefikTls=false"
+        HMCTS_SET="$HMCTS_SET --set global.tags.teamName=${{ inputs.team-name }}"
+        HMCTS_SET="$HMCTS_SET --set global.tags.applicationName=${{ inputs.application-name }}"
+        HMCTS_SET="$HMCTS_SET --set global.tags.builtFrom=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+        HMCTS_SET="$HMCTS_SET --set global.tags.businessArea=CFT"
+        HMCTS_SET="$HMCTS_SET --set global.tags.environment=aat"
+
+        echo "hmcts-set=$HMCTS_SET" >> $GITHUB_OUTPUT
+
     - name: Prepare Set Arguments
       id: set-args
       shell: bash
       run: |
-        SET_ARGS=""
+        # Start with HMCTS global values (can be overridden by user values)
+        SET_ARGS="${{ steps.hmcts-values.outputs.hmcts-set }}"
 
+        # Add user-provided set values (these override HMCTS defaults if same key)
         if [ -n "${{ inputs.set }}" ]; then
           while IFS= read -r line; do
             if [ -n "$line" ]; then
