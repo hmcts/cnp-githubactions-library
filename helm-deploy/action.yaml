@@ -82,17 +82,12 @@ runs:
       with:
         creds: ${{ inputs.azure-credentials }}
 
-    - name: Set up kubelogin for non-interactive login
-      uses: azure/use-kubelogin@v1
-      with:
-        kubelogin-version: 'v0.1.3'
-
     - name: Get AKS Credentials
       uses: azure/aks-set-context@v4
       with:
         resource-group: ${{ inputs.resource-group }}
         cluster-name: ${{ inputs.cluster-name }}
-        use-kubelogin: 'true'
+        admin: 'true'
 
     - name: Set up Helm
       uses: azure/setup-helm@v4
