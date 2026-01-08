@@ -1,0 +1,192 @@
+name: Helm Deploy
+
+on:
+  workflow_call:
+    inputs:
+      cluster-name:
+        description: 'Azure AKS cluster name. Uses secret.AKS_CLUSTER_NAME if not provided'
+        required: false
+        type: string
+        default: ''
+      resource-group:
+        description: 'Azure resource group containing the AKS cluster. Uses secret.AKS_RESOURCE_GROUP if not provided'
+        required: false
+        type: string
+        default: ''
+      release-name:
+        description: 'Helm release name'
+        required: true
+        type: string
+      namespace:
+        description: 'Kubernetes namespace for deployment'
+        required: false
+        type: string
+        default: 'default'
+      chart:
+        description: 'Path to the Helm chart (e.g., ./charts/my-app)'
+        required: true
+        type: string
+      values-files:
+        description: 'Comma-separated list of values files to use'
+        required: false
+        type: string
+        default: ''
+      set:
+        description: 'Set values on the command line (newline-delimited key=value pairs)'
+        required: false
+        type: string
+        default: ''
+      set-string:
+        description: 'Set STRING values on the command line (newline-delimited key=value pairs)'
+        required: false
+        type: string
+        default: ''
+      timeout:
+        description: 'Time to wait for Kubernetes operations (e.g., 5m0s, 10m0s)'
+        required: false
+        type: string
+        default: '5m0s'
+      atomic:
+        description: 'If true, roll back on failure'
+        required: false
+        type: boolean
+        default: true
+      wait:
+        description: 'Wait for resources to be ready before marking release as successful'
+        required: false
+        type: boolean
+        default: true
+      dry-run:
+        description: 'Simulate deployment without making changes'
+        required: false
+        type: boolean
+        default: false
+      oci-registry:
+        description: 'OCI registry URL for chart dependencies. Uses secret.OCI_REGISTRY if not provided'
+        required: false
+        type: string
+        default: ''
+      oci-username:
+        description: 'Username for OCI registry authentication. Uses secret.OCI_USERNAME if not provided'
+        required: false
+        type: string
+        default: ''
+      oci-password:
+        description: 'Password for OCI registry authentication. Uses secret.OCI_PASSWORD if not provided'
+        required: false
+        type: string
+        default: ''
+      admin:
+        description: 'Use admin credentials for AKS cluster'
+        required: false
+        type: boolean
+        default: false
+      runner:
+        description: 'GitHub runner to use'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      checkout-repository:
+        description: 'Whether to checkout the repository'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      AZURE_CREDENTIALS:
+        description: 'Azure service principal credentials (JSON format)'
+        required: true
+      AKS_CLUSTER_NAME:
+        description: 'AKS cluster name (optional, overridden by cluster-name input)'
+        required: false
+      AKS_RESOURCE_GROUP:
+        description: 'Azure resource group (optional, overridden by resource-group input)'
+        required: false
+      OCI_REGISTRY:
+        description: 'OCI registry URL (optional, overridden by oci-registry input)'
+        required: false
+      OCI_USERNAME:
+        description: 'OCI registry username (optional, overridden by oci-username input)'
+        required: false
+      OCI_PASSWORD:
+        description: 'OCI registry password (optional, overridden by oci-password input)'
+        required: false
+    outputs:
+      release-revision:
+        description: 'Helm release revision number'
+        value: ${{ jobs.helm-deploy.outputs.revision }}
+      release-status:
+        description: 'Status of the Helm release (deployed, failed, etc.)'
+        value: ${{ jobs.helm-deploy.outputs.status }}
+      deployment-time:
+        description: 'Time taken for the deployment'
+        value: ${{ jobs.helm-deploy.outputs.deployment-time }}
+
+jobs:
+  helm-deploy:
+    runs-on: ${{ inputs.runner }}
+    outputs:
+      revision: ${{ steps.deploy.outputs.release-revision }}
+      status: ${{ steps.deploy.outputs.release-status }}
+      deployment-time: ${{ steps.deploy.outputs.deployment-time }}
+    steps:
+      - name: Checkout repository
+        if: inputs.checkout-repository
+        uses: actions/checkout@v4
+
+      - name: Determine configuration variables
+        id: config-vars
+        shell: bash
+        run: |
+          # Priority: inputs > secrets
+          CLUSTER_NAME="${{ inputs.cluster-name }}"
+          if [ -z "$CLUSTER_NAME" ]; then
+            CLUSTER_NAME="${{ secrets.AKS_CLUSTER_NAME }}"
+          fi
+
+          RESOURCE_GROUP="${{ inputs.resource-group }}"
+          if [ -z "$RESOURCE_GROUP" ]; then
+            RESOURCE_GROUP="${{ secrets.AKS_RESOURCE_GROUP }}"
+          fi
+
+          OCI_REGISTRY="${{ inputs.oci-registry }}"
+          if [ -z "$OCI_REGISTRY" ]; then
+            OCI_REGISTRY="${{ secrets.OCI_REGISTRY }}"
+          fi
+
+          OCI_USERNAME="${{ inputs.oci-username }}"
+          if [ -z "$OCI_USERNAME" ]; then
+            OCI_USERNAME="${{ secrets.OCI_USERNAME }}"
+          fi
+
+          OCI_PASSWORD="${{ inputs.oci-password }}"
+          if [ -z "$OCI_PASSWORD" ]; then
+            OCI_PASSWORD="${{ secrets.OCI_PASSWORD }}"
+          fi
+
+          echo "cluster-name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
+          echo "resource-group=$RESOURCE_GROUP" >> $GITHUB_OUTPUT
+          echo "oci-registry=$OCI_REGISTRY" >> $GITHUB_OUTPUT
+          echo "oci-username=$OCI_USERNAME" >> $GITHUB_OUTPUT
+          echo "oci-password=$OCI_PASSWORD" >> $GITHUB_OUTPUT
+
+      - name: Deploy Helm chart
+        id: deploy
+        uses: hmcts/cnp-githubactions-library/helm-deploy@main
+        with:
+          cluster-name: ${{ steps.config-vars.outputs.cluster-name }}
+          resource-group: ${{ steps.config-vars.outputs.resource-group }}
+          azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
+          release-name: ${{ inputs.release-name }}
+          namespace: ${{ inputs.namespace }}
+          chart: ${{ inputs.chart }}
+          values-files: ${{ inputs.values-files }}
+          set: ${{ inputs.set }}
+          set-string: ${{ inputs.set-string }}
+          timeout: ${{ inputs.timeout }}
+          atomic: ${{ inputs.atomic }}
+          wait: ${{ inputs.wait }}
+          dry-run: ${{ inputs.dry-run }}
+          admin: ${{ inputs.admin }}
+          oci-registry: ${{ steps.config-vars.outputs.oci-registry }}
+          oci-username: ${{ steps.config-vars.outputs.oci-username }}
+          oci-password: ${{ steps.config-vars.outputs.oci-password }}
