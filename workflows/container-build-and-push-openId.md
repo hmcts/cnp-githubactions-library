@@ -53,9 +53,9 @@ jobs:
         latest
         ${{ github.sha }}
       platforms: linux/amd64,linux/arm64
-      azureContainerRegistryName: myacrname
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: myacrname
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
       build-args: |
         VERSION=${{ github.sha }}
         BUILD_DATE=${{ github.event.head_commit.timestamp }}
@@ -74,9 +74,9 @@ jobs:
 | `push` | Push image to registry | No | `true` |
 | `runner` | GitHub runner to use | No | `ubuntu-latest` |
 | `checkout-repository` | Whether to checkout the repository | No | `true` |
-| `azureContainerRegistryName` | Name of the ACR (without .azurecr.io) | **Yes** | - |
-| `azureClientId` | Client ID of the service principal for OIDC | **Yes** | - |
-| `azureTenantId` | Tenant ID hosting the service principal | No | `531ff96d-0ae9-462a-8d2d-bec7c0b42082` |
+| `registry-name` | Name of the ACR (without .azurecr.io) | **Yes** | - |
+| `azure-client-id` | Client ID of the service principal for OIDC | **Yes** | - |
+| `azure-tenant-id` | Tenant ID hosting the service principal | No | `531ff96d-0ae9-462a-8d2d-bec7c0b42082` |
 
 ## Outputs
 
@@ -95,9 +95,9 @@ jobs:
     uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-app
-      azureContainerRegistryName: hmctsprod
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: hmctsprod
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
 ```
 
 ### Multi-Platform Build with Custom Tags
@@ -113,9 +113,9 @@ jobs:
         v1.0.0
         ${{ github.sha }}
       platforms: linux/amd64,linux/arm64
-      azureContainerRegistryName: hmctsprod
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: hmctsprod
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
 ```
 
 ### Build with Custom Context and Dockerfile
@@ -128,9 +128,9 @@ jobs:
       image-name: my-app
       dockerfile: ./docker/Dockerfile.prod
       context: ./app
-      azureContainerRegistryName: hmctsprod
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: hmctsprod
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
 ```
 
 ### Build with Build Arguments
@@ -145,9 +145,9 @@ jobs:
         VERSION=${{ github.sha }}
         BUILD_DATE=${{ github.event.head_commit.timestamp }}
         NODE_ENV=production
-      azureContainerRegistryName: hmctsprod
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: hmctsprod
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
 ```
 
 ### Build Without Pushing (Testing)
@@ -159,9 +159,9 @@ jobs:
     with:
       image-name: my-app
       push: false
-      azureContainerRegistryName: hmctsprod
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: hmctsprod
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
 ```
 
 ## Platform Options
@@ -213,7 +213,7 @@ This workflow uses **OpenID Connect (OIDC)** for keyless authentication:
 3. Store the client ID and tenant ID as **repository secrets** (not organization-level secrets)
 4. Assign the `AcrPush` role to the service principal on your ACR
 
-> **⚠️ Important:** The `secrets.AZURE_CLIENT_ID` and `secrets.AZURE_TENANT_ID` references in your workflow are **repository-level secrets**. You must set these in your repository's settings (Settings > Secrets and variables > Actions), not at the organization level. Each repository using this workflow needs its own Azure credentials.
+> **⚠️ Important:** The `vars.AZURE_CLIENT_ID` and `vars.AZURE_TENANT_ID` references in your workflow are **repository-level secrets**. You must set these in your repository's settings (Settings > Secrets and variables > Actions), not at the organization level. Each repository using this workflow needs its own Azure credentials.
 
 See [Azure Login Action Documentation](https://github.com/Azure/login#configure-deployment-credentials) for detailed setup instructions.
 
@@ -237,7 +237,7 @@ The workflow automatically adds a detailed build summary to the GitHub Actions j
 
 ## Notes
 
-- Registry URL is automatically constructed as `{azureContainerRegistryName}.azurecr.io`
+- Registry URL is automatically constructed as `{registry-name}.azurecr.io`
 - ACR login is performed automatically via Azure CLI after OIDC authentication
 - The workflow uses official Docker actions for building and pushing
 - Metadata is extracted using `docker/metadata-action` for consistent tagging
@@ -253,7 +253,7 @@ The workflow automatically adds a detailed build summary to the GitHub Actions j
 
 ### "ACR Login Failed"
 
-- Verify `azureContainerRegistryName` is correct (without `.azurecr.io`)
+- Verify `registry-name` is correct (without `.azurecr.io`)
 - Check that the service principal can authenticate with `az acr login`
 - Verify network connectivity to the ACR endpoint
 - Ensure the service principal is not disabled in Entra ID

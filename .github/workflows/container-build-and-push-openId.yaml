@@ -1,4 +1,4 @@
-name: Container image build and push
+name: Container image build and push (OpenID)
 
 on:
   workflow_call:
@@ -47,15 +47,15 @@ on:
         required: false
         type: boolean
         default: true
-      azureContainerRegistryName:
-        description: 'The name of the Azure Container Registry (ACR) to push the image to'
+      registry-name:
+        description: 'The name of the Azure Container Registry (ACR) to push the image to (without .azurecr.io)'
         required: true
         type: string
-      azureClientId:
-        description: 'The client ID of the service principal to be used for login'
+      azure-client-id:
+        description: 'The client ID of the service principal to be used for OIDC login'
         required: true
         type: string
-      azureTenantId:
+      azure-tenant-id:
         description: 'The tenant ID that hosts the service principal to be used for login'
         required: false
         type: string
@@ -73,38 +73,26 @@ jobs:
     runs-on: ${{ inputs.runner }}
     permissions:
       id-token: write
+      contents: read
     outputs:
-      digest: ${{ steps.build-push.outputs.digest }}
-      tags: ${{ steps.build-push.outputs.tags }}
-    env:
-      AZURE_CONTAINER_REGISTRY_URL: ${{ inputs.azureContainerRegistryName }}.azurecr.io
+      digest: ${{ steps.build.outputs.digest }}
+      tags: ${{ steps.build.outputs.tags }}
     steps:
       - name: Checkout repository
         if: inputs.checkout-repository
         uses: actions/checkout@v4
 
-      - name: "Az CLI login"
-        uses: azure/login@v2
+      - name: Build and push container image
+        id: build
+        uses: hmcts/cnp-githubactions-library/container-build-push-openid@main
         with:
-          client-id: ${{ inputs.azureClientId }}
-          tenant-id: ${{ inputs.azureTenantId }}
-          allow-no-subscriptions: true
-
-      - name: "ACR Login - ${{ inputs.azureContainerRegistryName }}"
-        run: |
-          az acr login --name ${{ inputs.azureContainerRegistryName }}
-
-      - name: Build and push container
-        id: build-push
-        uses: hmcts/cnp-githubactions-library/container-build-push@main
-        with:
-          dockerfile: ${{ inputs.dockerfile }}
-          context: ${{ inputs.context }}
-          registry: ${{ steps.registry-vars.outputs.registry }}
-          registry-username: ${{ steps.registry-vars.outputs.username }}
-          registry-password: ${{ steps.registry-vars.outputs.password }}
+          azure-client-id: ${{ inputs.azure-client-id }}
+          azure-tenant-id: ${{ inputs.azure-tenant-id }}
+          registry-name: ${{ inputs.registry-name }}
           image-name: ${{ inputs.image-name }}
           image-tags: ${{ inputs.image-tags }}
-          build-args: ${{ inputs.build-args }}
+          dockerfile: ${{ inputs.dockerfile }}
+          context: ${{ inputs.context }}
           platforms: ${{ inputs.platforms }}
+          build-args: ${{ inputs.build-args }}
           push: ${{ inputs.push }}
