@@ -1,0 +1,291 @@
+name: 'Helm Deploy with OpenID'
+description: 'Deploy Helm charts to Azure AKS clusters using OIDC authentication with support for OCI dependencies'
+author: 'HMCTS'
+
+inputs:
+  azure-client-id:
+    description: 'Azure client ID for OIDC authentication'
+    required: true
+  azure-tenant-id:
+    description: 'Azure tenant ID for OIDC authentication'
+    required: false
+    default: '531ff96d-0ae9-462a-8d2d-bec7c0b42082'
+  environment:
+    description: 'Azure environment prefix (e.g., cft-preview-01, cft-aat-00). Cluster and resource group are derived as {environment}-aks and {environment}-rg'
+    required: true
+  team-name:
+    description: 'Team name for Azure resource tagging (global.tags.teamName)'
+    required: true
+  application-name:
+    description: 'Application name for Azure resource tagging (global.tags.applicationName)'
+    required: true
+  release-name:
+    description: 'Helm release name'
+    required: true
+  namespace:
+    description: 'Kubernetes namespace for deployment'
+    required: false
+    default: 'default'
+  chart:
+    description: 'Path to the Helm chart (e.g., ./charts/my-app)'
+    required: true
+  values-files:
+    description: 'Comma-separated list of values files to use'
+    required: false
+    default: ''
+  set:
+    description: 'Set values on the command line (newline-delimited key=value pairs)'
+    required: false
+    default: ''
+  set-string:
+    description: 'Set STRING values on the command line (newline-delimited key=value pairs)'
+    required: false
+    default: ''
+  timeout:
+    description: 'Time to wait for Kubernetes operations (e.g., 5m0s, 10m0s)'
+    required: false
+    default: '5m0s'
+  dry-run:
+    description: 'Simulate deployment without making changes'
+    required: false
+    default: 'false'
+  oci-registry:
+    description: 'OCI registry URL for chart dependencies (e.g., hmctspublic.azurecr.io)'
+    required: false
+    default: ''
+  oci-username:
+    description: 'Username for OCI registry authentication'
+    required: false
+    default: ''
+  oci-password:
+    description: 'Password for OCI registry authentication'
+    required: false
+    default: ''
+  values-template:
+    description: 'Path to values template file for envsubst processing. The output file will be used as a values file.'
+    required: false
+    default: ''
+  subchart-paths:
+    description: 'Glob pattern for subchart directories to update dependencies before the main chart (e.g., apps/*/helm)'
+    required: false
+    default: ''
+
+outputs:
+  release-revision:
+    description: 'Helm release revision number'
+    value: ${{ steps.deploy.outputs.revision }}
+  release-status:
+    description: 'Status of the Helm release (deployed, failed, etc.)'
+    value: ${{ steps.deploy.outputs.status }}
+  deployment-time:
+    description: 'Time taken for the deployment'
+    value: ${{ steps.deploy.outputs.deployment-time }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Azure Login
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        allow-no-subscriptions: true
+
+    - name: Get AKS Credentials
+      uses: azure/aks-set-context@v4
+      with:
+        resource-group: ${{ inputs.environment }}-rg
+        cluster-name: ${{ inputs.environment }}-aks
+        admin: 'true'
+
+    - name: Set up Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: 'v3.14.0'
+
+    - name: Login to OCI Registry
+      if: inputs.oci-registry != ''
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.oci-username }}" ] && [ -n "${{ inputs.oci-password }}" ]; then
+          echo "${{ inputs.oci-password }}" | helm registry login "${{ inputs.oci-registry }}" \
+            --username "${{ inputs.oci-username }}" \
+            --password-stdin
+        fi
+
+    - name: Process Values Template
+      id: values-template
+      if: inputs.values-template != ''
+      shell: bash
+      run: |
+        TEMPLATE="${{ inputs.values-template }}"
+        if [ ! -f "$TEMPLATE" ]; then
+          echo "::error::Values template file not found: $TEMPLATE"
+          exit 1
+        fi
+
+        # Generate output filename by removing .template from the name
+        OUTPUT="${TEMPLATE%.template.yaml}.yaml"
+        OUTPUT="${OUTPUT%.template.yml}.yml"
+        # If no .template was in the name, append .generated
+        if [ "$OUTPUT" == "$TEMPLATE" ]; then
+          OUTPUT="${TEMPLATE%.*}.generated.${TEMPLATE##*.}"
+        fi
+
+        echo "Processing values template: $TEMPLATE -> $OUTPUT"
+        envsubst < "$TEMPLATE" > "$OUTPUT"
+
+        echo "output-file=$OUTPUT" >> $GITHUB_OUTPUT
+
+    - name: Update Subchart Dependencies
+      if: inputs.subchart-paths != ''
+      shell: bash
+      run: |
+        echo "Updating subchart dependencies..."
+        for subchart in ${{ inputs.subchart-paths }}; do
+          if [ -f "$subchart/Chart.yaml" ]; then
+            echo "  Updating dependencies for: $subchart"
+            helm dependency update "$subchart"
+          fi
+        done
+
+    - name: Update Helm Dependencies
+      shell: bash
+      run: |
+        helm dependency update "${{ inputs.chart }}"
+
+    - name: Prepare Values Files
+      id: values
+      shell: bash
+      run: |
+        VALUES_ARGS=""
+
+        # Include generated template file if it exists
+        TEMPLATE_OUTPUT="${{ steps.values-template.outputs.output-file }}"
+        if [ -n "$TEMPLATE_OUTPUT" ] && [ -f "$TEMPLATE_OUTPUT" ]; then
+          VALUES_ARGS="-f $TEMPLATE_OUTPUT"
+        fi
+
+        if [ -n "${{ inputs.values-files }}" ]; then
+          IFS=',' read -ra FILES <<< "${{ inputs.values-files }}"
+          for file in "${FILES[@]}"; do
+            file=$(echo "$file" | xargs)
+            if [ -f "$file" ]; then
+              VALUES_ARGS="$VALUES_ARGS -f $file"
+            else
+              echo "::warning::Values file not found: $file"
+            fi
+          done
+        fi
+
+        echo "values-args=$VALUES_ARGS" >> $GITHUB_OUTPUT
+
+    - name: Prepare HMCTS Global Values
+      id: hmcts-values
+      shell: bash
+      env:
+        GITHUB_SERVER_URL: ${{ github.server_url }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: |
+        # Build HMCTS-specific global values for Helm
+        HMCTS_SET=""
+        HMCTS_SET="$HMCTS_SET --set global.tenantId=531ff96d-0ae9-462a-8d2d-bec7c0b42082"
+        HMCTS_SET="$HMCTS_SET --set global.environment=aat"
+        HMCTS_SET="$HMCTS_SET --set global.enableKeyVaults=true"
+        HMCTS_SET="$HMCTS_SET --set global.disableTraefikTls=false"
+        HMCTS_SET="$HMCTS_SET --set global.tags.teamName=${{ inputs.team-name }}"
+        HMCTS_SET="$HMCTS_SET --set global.tags.applicationName=${{ inputs.application-name }}"
+        HMCTS_SET="$HMCTS_SET --set global.tags.builtFrom=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+        HMCTS_SET="$HMCTS_SET --set global.tags.businessArea=CFT"
+        HMCTS_SET="$HMCTS_SET --set global.tags.environment=aat"
+
+        echo "hmcts-set=$HMCTS_SET" >> $GITHUB_OUTPUT
+
+    - name: Prepare Set Arguments
+      id: set-args
+      shell: bash
+      run: |
+        # Start with HMCTS global values (can be overridden by user values)
+        SET_ARGS="${{ steps.hmcts-values.outputs.hmcts-set }}"
+
+        # Add user-provided set values (these override HMCTS defaults if same key)
+        if [ -n "${{ inputs.set }}" ]; then
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then
+              SET_ARGS="$SET_ARGS --set $line"
+            fi
+          done <<< "${{ inputs.set }}"
+        fi
+
+        if [ -n "${{ inputs.set-string }}" ]; then
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then
+              SET_ARGS="$SET_ARGS --set-string $line"
+            fi
+          done <<< "${{ inputs.set-string }}"
+        fi
+
+        echo "set-args=$SET_ARGS" >> $GITHUB_OUTPUT
+
+    - name: Deploy Helm Chart
+      id: deploy
+      shell: bash
+      run: |
+        START_TIME=$(date +%s)
+
+        HELM_CMD="helm upgrade --install ${{ inputs.release-name }} ${{ inputs.chart }}"
+        HELM_CMD="$HELM_CMD --namespace ${{ inputs.namespace }}"
+        HELM_CMD="$HELM_CMD --timeout ${{ inputs.timeout }}"
+        HELM_CMD="$HELM_CMD --atomic"
+
+        if [ "${{ inputs.dry-run }}" == "true" ]; then
+          HELM_CMD="$HELM_CMD --dry-run"
+        fi
+
+        HELM_CMD="$HELM_CMD ${{ steps.values.outputs.values-args }}"
+        HELM_CMD="$HELM_CMD ${{ steps.set-args.outputs.set-args }}"
+
+        echo "Executing: $HELM_CMD"
+
+        if eval $HELM_CMD; then
+          DEPLOY_STATUS="success"
+        else
+          DEPLOY_STATUS="failed"
+        fi
+
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+
+        if [ "${{ inputs.dry-run }}" != "true" ]; then
+          RELEASE_INFO=$(helm status ${{ inputs.release-name }} -n ${{ inputs.namespace }} -o json 2>/dev/null || echo '{}')
+          REVISION=$(echo "$RELEASE_INFO" | jq -r '.version // "N/A"')
+          STATUS=$(echo "$RELEASE_INFO" | jq -r '.info.status // "unknown"')
+        else
+          REVISION="dry-run"
+          STATUS="dry-run"
+        fi
+
+        echo "revision=$REVISION" >> $GITHUB_OUTPUT
+        echo "status=$STATUS" >> $GITHUB_OUTPUT
+        echo "deployment-time=${DURATION}s" >> $GITHUB_OUTPUT
+
+        if [ "$DEPLOY_STATUS" == "failed" ]; then
+          exit 1
+        fi
+
+    - name: Output Deployment Summary
+      shell: bash
+      run: |
+        echo "### Helm Deployment Summary :rocket:" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Release:** \`${{ inputs.release-name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Namespace:** \`${{ inputs.namespace }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Chart:** \`${{ inputs.chart }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** \`${{ inputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Revision:** \`${{ steps.deploy.outputs.revision }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Status:** \`${{ steps.deploy.outputs.status }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Duration:** \`${{ steps.deploy.outputs.deployment-time }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ inputs.dry-run }}" == "true" ]; then
+          echo "> :information_source: **This was a dry-run deployment. No changes were made.**" >> $GITHUB_STEP_SUMMARY
+        fi
