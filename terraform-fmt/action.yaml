@@ -1,0 +1,54 @@
+name: 'Terraform Format Check'
+description: 'Check that Terraform files are properly formatted'
+author: 'HMCTS'
+
+inputs:
+  working-directory:
+    description: 'Terraform working directory'
+    required: false
+    default: 'infrastructure'
+  terraform-version-file:
+    description: 'Path to .terraform-version file (relative to working-directory)'
+    required: false
+    default: '.terraform-version'
+  recursive:
+    description: 'Check formatting recursively'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version_file: ${{ inputs.working-directory }}/${{ inputs.terraform-version-file }}
+
+    - name: Terraform Format Check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        RECURSIVE_FLAG=""
+        if [[ "${{ inputs.recursive }}" == "true" ]]; then
+          RECURSIVE_FLAG="-recursive"
+        fi
+
+        if ! terraform fmt -check $RECURSIVE_FLAG -diff; then
+          echo "::error::Terraform files are not formatted. Run 'terraform fmt -recursive' in the ${{ inputs.working-directory }} directory to fix."
+
+          # Output to step summary
+          echo "### Terraform Format Check Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Terraform files are not properly formatted." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Fix:** Run the following command in the \`${{ inputs.working-directory }}\` directory:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "terraform fmt -recursive" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+          exit 1
+        fi
+
+        echo "### Terraform Format Check Passed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "All Terraform files are properly formatted." >> $GITHUB_STEP_SUMMARY

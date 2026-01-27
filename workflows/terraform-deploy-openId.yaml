@@ -1,0 +1,116 @@
+name: Terraform Deploy (OpenID)
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment (e.g., aat, prod)'
+        required: true
+        type: string
+      subscription:
+        description: 'Azure subscription name (e.g., DCD-CNP-DEV)'
+        required: true
+        type: string
+      aks-subscription:
+        description: 'Azure subscription name for AKS cluster (contains network subnets)'
+        required: true
+        type: string
+      storage-account:
+        description: 'Storage account postfix (nonprod, prod) to make mgmtstatestore{nonprod|prod}'
+        required: true
+        type: string
+      azure-client-id:
+        description: 'Azure client ID for OIDC authentication'
+        required: true
+        type: string
+      azure-tenant-id:
+        description: 'Azure tenant ID for OIDC authentication'
+        required: false
+        type: string
+        default: '531ff96d-0ae9-462a-8d2d-bec7c0b42082'
+      azure-subscription-id:
+        description: 'Azure subscription ID for OIDC authentication'
+        required: true
+        type: string
+      working-directory:
+        description: 'Terraform working directory'
+        required: false
+        type: string
+        default: 'infrastructure'
+      plan-only:
+        description: 'Run plan only, skip apply'
+        required: false
+        type: boolean
+        default: false
+      product:
+        description: 'Product name (if not provided, extracted from helm-chart-path)'
+        required: false
+        type: string
+        default: ''
+      helm-chart-path:
+        description: 'Path to Chart.yaml for product extraction (e.g., helm/myapp/Chart.yaml)'
+        required: false
+        type: string
+        default: ''
+      business-area:
+        description: 'Business area tag (CFT, SDS, etc.)'
+        required: false
+        type: string
+        default: 'CFT'
+      post-plan-to-pr:
+        description: 'Post plan output to PR comment'
+        required: false
+        type: boolean
+        default: true
+      runner:
+        description: 'GitHub runner to use'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      checkout-repository:
+        description: 'Whether to checkout the repository'
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      plan-exitcode:
+        description: 'Terraform plan exit code (0=no changes, 2=changes)'
+        value: ${{ jobs.terraform.outputs.plan-exitcode }}
+      has-changes:
+        description: 'Boolean indicating if plan has changes'
+        value: ${{ jobs.terraform.outputs.has-changes }}
+
+jobs:
+  terraform:
+    name: Terraform ${{ inputs.plan-only && 'Plan' || 'Apply' }}
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    outputs:
+      plan-exitcode: ${{ steps.deploy.outputs.plan-exitcode }}
+      has-changes: ${{ steps.deploy.outputs.has-changes }}
+
+    steps:
+      - name: Checkout repository
+        if: inputs.checkout-repository
+        uses: actions/checkout@v4
+
+      - name: Terraform Deploy
+        id: deploy
+        uses: hmcts/cnp-githubactions-library/terraform-deploy-openid@main
+        with:
+          environment: ${{ inputs.environment }}
+          subscription: ${{ inputs.subscription }}
+          aks-subscription: ${{ inputs.aks-subscription }}
+          storage-account: ${{ inputs.storage-account }}
+          azure-client-id: ${{ inputs.azure-client-id }}
+          azure-tenant-id: ${{ inputs.azure-tenant-id }}
+          azure-subscription-id: ${{ inputs.azure-subscription-id }}
+          working-directory: ${{ inputs.working-directory }}
+          plan-only: ${{ inputs.plan-only }}
+          product: ${{ inputs.product }}
+          helm-chart-path: ${{ inputs.helm-chart-path }}
+          business-area: ${{ inputs.business-area }}
+          post-plan-to-pr: ${{ inputs.post-plan-to-pr }}

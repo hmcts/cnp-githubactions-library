@@ -1,0 +1,303 @@
+name: 'Terraform Deploy with OpenID'
+description: 'Run Terraform plan and optionally apply for infrastructure changes using OIDC authentication'
+author: 'HMCTS'
+
+inputs:
+  environment:
+    description: 'Target environment (e.g., aat, prod)'
+    required: true
+  subscription:
+    description: 'Azure subscription name (e.g., DCD-CNP-DEV)'
+    required: true
+  aks-subscription:
+    description: 'Azure subscription name for AKS cluster (contains network subnets)'
+    required: true
+  storage-account:
+    description: 'Storage account postfix (nonprod, prod) to make mgmtstatestore{nonprod|prod}'
+    required: true
+  azure-client-id:
+    description: 'Azure client ID for OIDC authentication'
+    required: true
+  azure-tenant-id:
+    description: 'Azure tenant ID for OIDC authentication'
+    required: false
+    default: '531ff96d-0ae9-462a-8d2d-bec7c0b42082'
+  azure-subscription-id:
+    description: 'Azure subscription ID for OIDC authentication'
+    required: true
+  working-directory:
+    description: 'Terraform working directory'
+    required: false
+    default: 'infrastructure'
+  plan-only:
+    description: 'Run plan only, skip apply'
+    required: false
+    default: 'false'
+  product:
+    description: 'Product name (if not provided, extracted from helm-chart-path)'
+    required: false
+    default: ''
+  helm-chart-path:
+    description: 'Path to Chart.yaml for product extraction (e.g., helm/myapp/Chart.yaml)'
+    required: false
+    default: ''
+  business-area:
+    description: 'Business area tag (CFT, SDS, etc.)'
+    required: false
+    default: 'CFT'
+  post-plan-to-pr:
+    description: 'Post plan output to PR comment'
+    required: false
+    default: 'true'
+
+outputs:
+  plan-exitcode:
+    description: 'Terraform plan exit code (0=no changes, 2=changes)'
+    value: ${{ steps.plan.outputs.exitcode }}
+  has-changes:
+    description: 'Boolean indicating if plan has changes'
+    value: ${{ steps.plan.outputs.exitcode == '2' }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Extract product name
+      id: metadata
+      shell: bash
+      run: |
+        PRODUCT="${{ inputs.product }}"
+
+        if [ -z "$PRODUCT" ] && [ -n "${{ inputs.helm-chart-path }}" ]; then
+          CHART_FILE="${{ inputs.helm-chart-path }}"
+          if [ -f "$CHART_FILE" ]; then
+            # Extract team from annotations (same pattern as helm-deploy)
+            PRODUCT=$(grep -A 1 'annotations:' "$CHART_FILE" | grep 'team:' | awk '{print $2}' | tr -d '"')
+          fi
+        fi
+
+        if [ -z "$PRODUCT" ]; then
+          echo "::error::No product name provided and could not extract from Chart.yaml. Provide 'product' input or valid 'helm-chart-path'."
+          exit 1
+        fi
+
+        echo "product=$PRODUCT" >> "$GITHUB_OUTPUT"
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version_file: ${{ inputs.working-directory }}/.terraform-version
+        terraform_wrapper: false
+
+    - name: Azure Login (OIDC)
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+
+    - name: Get Azure context
+      id: azure-context
+      shell: bash
+      run: |
+        TENANT_ID=$(az account show --query tenantId -o tsv)
+        CLIENT_ID=$(az account show --query user.name -o tsv)
+        SP_OBJECT_ID=$(az ad sp show --id "$CLIENT_ID" --query id -o tsv)
+
+        echo "tenant_id=$TENANT_ID" >> "$GITHUB_OUTPUT"
+        echo "sp_object_id=$SP_OBJECT_ID" >> "$GITHUB_OUTPUT"
+
+    - name: Set subscription
+      id: subscription
+      shell: bash
+      run: |
+        az account set --subscription "${{ inputs.subscription }}"
+        SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+        echo "id=$SUBSCRIPTION_ID" >> "$GITHUB_OUTPUT"
+
+    - name: Resolve AKS subscription ID
+      id: aks-subscription
+      shell: bash
+      run: |
+        AKS_SUBSCRIPTION_ID=$(az account show --subscription "${{ inputs.aks-subscription }}" --query id -o tsv)
+        echo "id=$AKS_SUBSCRIPTION_ID" >> "$GITHUB_OUTPUT"
+
+    - name: Get Storage Account Key
+      id: storage-key
+      shell: bash
+      run: |
+        STORAGE_ACCOUNT="mgmtstatestore${{ inputs.storage-account }}"
+        RESOURCE_GROUP="mgmt-state-store-${{ inputs.storage-account }}"
+        KEY=$(az storage account keys list \
+          --account-name "$STORAGE_ACCOUNT" \
+          --resource-group "$RESOURCE_GROUP" \
+          --query '[0].value' -o tsv)
+        echo "::add-mask::$KEY"
+        echo "key=$KEY" >> "$GITHUB_OUTPUT"
+
+    - name: Terraform Init
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ARM_ACCESS_KEY: ${{ steps.storage-key.outputs.key }}
+      run: |
+        terraform init -reconfigure \
+          -backend-config="storage_account_name=mgmtstatestore${{ inputs.storage-account }}" \
+          -backend-config="container_name=mgmtstatestorecontainer${{ inputs.environment }}" \
+          -backend-config="resource_group_name=mgmt-state-store-${{ inputs.storage-account }}" \
+          -backend-config="key=${{ github.event.repository.name }}/${{ inputs.environment }}/terraform.tfstate"
+
+    - name: Terraform Validate
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform validate
+
+    - name: Terraform Plan
+      id: plan
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ARM_ACCESS_KEY: ${{ steps.storage-key.outputs.key }}
+        PRODUCT: ${{ steps.metadata.outputs.product }}
+        TENANT_ID: ${{ steps.azure-context.outputs.tenant_id }}
+        SP_OBJECT_ID: ${{ steps.azure-context.outputs.sp_object_id }}
+      run: |
+        # Map environment names to Azure policy-compliant values
+        case "${{ inputs.environment }}" in
+          prod|production) ENV_TAG="production" ;;
+          aat|stg|staging) ENV_TAG="staging" ;;
+          dev|development) ENV_TAG="development" ;;
+          test|testing) ENV_TAG="testing" ;;
+          demo) ENV_TAG="demo" ;;
+          ithc) ENV_TAG="ithc" ;;
+          sbox|sandbox) ENV_TAG="sandbox" ;;
+          *) ENV_TAG="${{ inputs.environment }}" ;;
+        esac
+
+        # Construct common_tags as compact JSON and write to tfvars file
+        jq -c -n \
+          --arg env "$ENV_TAG" \
+          --arg managedBy "$PRODUCT" \
+          --arg builtFrom "$GITHUB_REPOSITORY" \
+          --arg application "$PRODUCT" \
+          --arg businessArea "${{ inputs.business-area }}" \
+          '{environment: $env, managedBy: $managedBy, builtFrom: $builtFrom, application: $application, businessArea: $businessArea}' \
+          > common_tags.json
+
+        echo "common_tags = $(cat common_tags.json)" > terraform.auto.tfvars
+
+        set +e
+        terraform plan -detailed-exitcode -out=tfplan \
+          -var "env=${{ inputs.environment }}" \
+          -var "product=${PRODUCT}" \
+          -var "subscription=${{ steps.subscription.outputs.id }}" \
+          -var "aks_subscription_id=${{ steps.aks-subscription.outputs.id }}" \
+          -var "tenant_id=${TENANT_ID}" \
+          -var "builtFrom=${GITHUB_REPOSITORY}" \
+          -var "ci_service_principal_object_id=${SP_OBJECT_ID}"
+        EXITCODE=$?
+        echo "exitcode=$EXITCODE" >> "$GITHUB_OUTPUT"
+        if [ $EXITCODE -eq 1 ]; then
+          exit 1
+        fi
+
+    - name: Save Plan Output
+      if: ${{ github.event.pull_request.number && steps.plan.outputs.exitcode == '2' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform show -no-color tfplan > plan.txt
+
+    - name: Post Plan to PR
+      if: ${{ github.event.pull_request.number && steps.plan.outputs.exitcode == '2' && inputs.post-plan-to-pr == 'true' }}
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          const planPath = path.join('${{ inputs.working-directory }}', 'plan.txt');
+          const plan = fs.readFileSync(planPath, 'utf8');
+
+          const maxLength = 60000;
+          const truncatedPlan = plan.length > maxLength
+            ? plan.substring(0, maxLength) + '\n\n... (truncated)'
+            : plan;
+
+          const body = [
+            '### Terraform Plan for `${{ inputs.environment }}`',
+            '',
+            '<details>',
+            '<summary>Show Plan</summary>',
+            '',
+            '```terraform',
+            truncatedPlan,
+            '```',
+            '',
+            '</details>'
+          ].join('\n');
+
+          const prNumber = context.payload.pull_request?.number;
+          if (!prNumber) {
+            console.log('No PR number found, skipping comment');
+            return;
+          }
+
+          const { data: comments } = await github.rest.issues.listComments({
+            issue_number: prNumber,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+          });
+
+          const botComment = comments.find(comment =>
+            comment.user.type === 'Bot' &&
+            comment.body.includes('Terraform Plan for `${{ inputs.environment }}`')
+          );
+
+          if (botComment) {
+            await github.rest.issues.updateComment({
+              comment_id: botComment.id,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+          } else {
+            await github.rest.issues.createComment({
+              issue_number: prNumber,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+          }
+
+    - name: Terraform Apply
+      if: ${{ inputs.plan-only == 'false' && steps.plan.outputs.exitcode == '2' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ARM_ACCESS_KEY: ${{ steps.storage-key.outputs.key }}
+      run: terraform apply -auto-approve tfplan
+
+    - name: Output Summary
+      shell: bash
+      run: |
+        EXITCODE="${{ steps.plan.outputs.exitcode }}"
+        ENV="${{ inputs.environment }}"
+        PLAN_ONLY="${{ inputs.plan-only }}"
+
+        echo "### Terraform Deploy Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Environment:** \`$ENV\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Subscription:** \`${{ inputs.subscription }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Product:** \`${{ steps.metadata.outputs.product }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Authentication:** OIDC" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        if [ "$EXITCODE" == "0" ]; then
+          echo "**Result:** No changes detected" >> $GITHUB_STEP_SUMMARY
+        elif [ "$EXITCODE" == "2" ]; then
+          if [ "$PLAN_ONLY" == "true" ]; then
+            echo "**Result:** Changes detected (plan only)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Result:** Changes applied successfully" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "**Result:** Plan failed" >> $GITHUB_STEP_SUMMARY
+        fi
