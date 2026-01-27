@@ -204,8 +204,10 @@ This workflow uses **OpenID Connect (OIDC)** for keyless authentication:
 
 1. Create a service principal in Azure
 2. Configure federated credentials in Entra ID pointing to your GitHub repository
-3. Store the client ID and tenant ID as repository secrets
+3. Store the client ID and tenant ID as **repository secrets** (not organization-level secrets)
 4. Assign the `AcrPush` role to the service principal on your ACR
+
+> **⚠️ Important:** The `secrets.AZURE_CLIENT_ID` and `secrets.AZURE_TENANT_ID` references in your workflow are **repository-level secrets**. You must set these in your repository's settings (Settings > Secrets and variables > Actions), not at the organization level. Each repository using this workflow needs its own Azure credentials.
 
 See [Azure Login Action Documentation](https://github.com/Azure/login#configure-deployment-credentials) for detailed setup instructions.
 
