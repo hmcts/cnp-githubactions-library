@@ -1,0 +1,130 @@
+name: Container image build and push
+
+on:
+  workflow_call:
+    inputs:
+      dockerfile:
+        description: 'Path to the Dockerfile'
+        required: false
+        type: string
+        default: './Dockerfile'
+      context:
+        description: 'Build context path'
+        required: false
+        type: string
+        default: '.'
+      image-name:
+        description: 'Image name (e.g., myapp)'
+        required: true
+        type: string
+      image-tags:
+        description: 'Space-separated list of tags (e.g., "latest v1.0.0")'
+        required: false
+        type: string
+        default: 'latest'
+      build-args:
+        description: 'List of build-time variables (newline-delimited KEY=value pairs)'
+        required: false
+        type: string
+        default: ''
+      platforms:
+        description: 'Comma-separated list of target platforms (e.g., linux/amd64,linux/arm64,linux/arm/v7). Common options: linux/amd64 (Intel/AMD 64-bit), linux/arm64 (ARM 64-bit), linux/arm/v7 (ARM 32-bit)'
+        required: false
+        type: string
+        default: 'linux/amd64'
+      push:
+        description: 'Push image to registry'
+        required: false
+        type: boolean
+        default: true
+      runner:
+        description: 'GitHub runner to use'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      checkout-repository:
+        description: 'Whether to checkout the repository'
+        required: false
+        type: boolean
+        default: true
+      azureContainerRegistryName:
+        description: 'The name of the Azure Container Registry (ACR) to push the image to'
+        required: true
+        type: string
+      azureClientId:
+        description: 'The client ID of the service principal to be used for login'
+        required: true
+        type: string
+      azureTenantId:
+        description: 'The tenant ID that hosts the service principal to be used for login'
+        required: false
+        type: string
+        default: '531ff96d-0ae9-462a-8d2d-bec7c0b42082'
+    outputs:
+      image-digest:
+        description: 'Image digest of the built container'
+        value: ${{ jobs.build-and-push.outputs.digest }}
+      image-tags:
+        description: 'Full image tags that were pushed'
+        value: ${{ jobs.build-and-push.outputs.tags }}
+
+jobs:
+  build-and-push:
+    runs-on: ${{ inputs.runner }}
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      tags: ${{ steps.meta.outputs.tags }}
+    env:
+      AZURE_CONTAINER_REGISTRY_URL: ${{ inputs.azureContainerRegistryName }}.azurecr.io
+    steps:
+      - name: Checkout repository
+        if: inputs.checkout-repository
+        uses: actions/checkout@v4
+
+      - name: "Az CLI login"
+        uses: azure/login@v2
+        with:
+          client-id: ${{ inputs.azureClientId }}
+          tenant-id: ${{ inputs.azureTenantId }}
+          allow-no-subscriptions: true
+
+      - name: "ACR Login - ${{ inputs.azureContainerRegistryName }}"
+        run: |
+          az acr login --name ${{ inputs.azureContainerRegistryName }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.AZURE_CONTAINER_REGISTRY_URL }}/${{ inputs.image-name }}
+          tags: ${{ inputs.image-tags }}
+
+      - name: Build and push container image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: ${{ inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ inputs.build-args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Output image information
+        run: |
+          echo "### Container Build Summary 📦" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.AZURE_CONTAINER_REGISTRY_URL }}/${{ inputs.image-name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms:** \`${{ inputs.platforms }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Pushed:** \`${{ inputs.push }}\`" >> $GITHUB_STEP_SUMMARY
