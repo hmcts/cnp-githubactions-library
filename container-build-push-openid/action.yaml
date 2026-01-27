@@ -1,0 +1,120 @@
+name: 'Container Build and Push with OpenId'
+description: 'Build and push container images to Azure Container Registry using OIDC with multi-platform support'
+author: 'HMCTS'
+
+inputs:
+  dockerfile:
+    description: 'Path to the Dockerfile'
+    required: false
+    default: './Dockerfile'
+  context:
+    description: 'Build context path'
+    required: false
+    default: '.'
+  azure-client-id:
+    description: 'Azure client ID for OIDC authentication'
+    required: true
+  azure-tenant-id:
+    description: 'Azure tenant ID for OIDC authentication'
+    required: false
+    default: '531ff96d-0ae9-462a-8d2d-bec7c0b42082'
+  registry-name:
+    description: 'Azure Container Registry name (without .azurecr.io)'
+    required: true
+  image-name:
+    description: 'Image name (e.g., myapp)'
+    required: true
+  image-tags:
+    description: 'Space-separated list of tags (e.g., "latest v1.0.0")'
+    required: false
+    default: 'latest'
+  build-args:
+    description: 'List of build-time variables (newline-delimited KEY=value pairs)'
+    required: false
+    default: ''
+  platforms:
+    description: 'Comma-separated list of target platforms (e.g., linux/amd64,linux/arm64)'
+    required: false
+    default: 'linux/amd64'
+  push:
+    description: 'Push image to registry'
+    required: false
+    default: 'true'
+  cache-from:
+    description: 'External cache sources (e.g., type=gha)'
+    required: false
+    default: 'type=gha'
+  cache-to:
+    description: 'Cache export destinations (e.g., type=gha,mode=max)'
+    required: false
+    default: 'type=gha,mode=max'
+
+outputs:
+  digest:
+    description: 'Image digest of the built container'
+    value: ${{ steps.build.outputs.digest }}
+  tags:
+    description: 'Full image tags that were pushed'
+    value: ${{ steps.meta.outputs.tags }}
+  metadata:
+    description: 'Build metadata (JSON)'
+    value: ${{ steps.meta.outputs.json }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set globals
+      id: globals
+      shell: bash
+      run: |
+        echo "AZURE_REGISTRY_URL=${{ inputs.registry-name }}.azurecr.io" >> "${GITHUB_OUTPUT}"
+
+    - name: "Az CLI login"
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        allow-no-subscriptions: true
+
+    - name: "ACR Login - ${{ inputs.registry-name }}"
+      shell: bash
+      run: |
+        az acr login --name ${{ inputs.registry-name }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Extract metadata (tags, labels)
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ steps.globals.outputs.AZURE_REGISTRY_URL }}/${{ inputs.image-name }}
+        tags: ${{ inputs.image-tags }}
+
+    - name: Build and push container image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.dockerfile }}
+        platforms: ${{ inputs.platforms }}
+        push: ${{ inputs.push }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: ${{ inputs.build-args }}
+        cache-from: ${{ inputs.cache-from }}
+        cache-to: ${{ inputs.cache-to }}
+
+    - name: Output image information
+      shell: bash
+      run: |
+        echo "### Container Build Summary 📦" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Image:** \`${{ steps.globals.outputs.AZURE_REGISTRY_URL }}/${{ inputs.image-name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Platforms:** \`${{ inputs.platforms }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Pushed:** \`${{ inputs.push }}\`" >> $GITHUB_STEP_SUMMARY
