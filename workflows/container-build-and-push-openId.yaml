@@ -84,8 +84,8 @@ jobs:
       - name: "Az CLI login"
         uses: azure/login@v2
         with:
-          client-id: ${{ inputs.clientId }}
-          tenant-id: ${{ inputs.tenantId }}
+          client-id: ${{ inputs.azureClientId }}
+          tenant-id: ${{ inputs.azureTenantId }}
           allow-no-subscriptions: true
 
       - name: "ACR Login - ${{ inputs.azureContainerRegistryName }}"
