@@ -1,0 +1,147 @@
+name: Helm Deploy (OpenID)
+
+on:
+  workflow_call:
+    inputs:
+      azureClientId:
+        description: 'The client ID of the service principal to be used for OIDC login'
+        required: true
+        type: string
+      azureTenantId:
+        description: 'The tenant ID that hosts the service principal'
+        required: false
+        type: string
+        default: '531ff96d-0ae9-462a-8d2d-bec7c0b42082'
+      environment:
+        description: 'Azure environment prefix (e.g., cft-preview-01, cft-aat-00). Cluster and resource group are derived as {environment}-aks and {environment}-rg'
+        required: true
+        type: string
+      team-name:
+        description: 'Team name for Azure resource tagging (global.tags.teamName)'
+        required: true
+        type: string
+      application-name:
+        description: 'Application name for Azure resource tagging (global.tags.applicationName)'
+        required: true
+        type: string
+      release-name:
+        description: 'Helm release name'
+        required: true
+        type: string
+      namespace:
+        description: 'Kubernetes namespace for deployment'
+        required: false
+        type: string
+        default: 'default'
+      chart:
+        description: 'Path to the Helm chart (e.g., ./charts/my-app)'
+        required: true
+        type: string
+      values-files:
+        description: 'Comma-separated list of values files to use'
+        required: false
+        type: string
+        default: ''
+      set:
+        description: 'Set values on the command line (newline-delimited key=value pairs)'
+        required: false
+        type: string
+        default: ''
+      set-string:
+        description: 'Set STRING values on the command line (newline-delimited key=value pairs)'
+        required: false
+        type: string
+        default: ''
+      timeout:
+        description: 'Time to wait for Kubernetes operations (e.g., 5m0s, 10m0s)'
+        required: false
+        type: string
+        default: '5m0s'
+      dry-run:
+        description: 'Simulate deployment without making changes'
+        required: false
+        type: boolean
+        default: false
+      oci-registry:
+        description: 'OCI registry URL for chart dependencies'
+        required: false
+        type: string
+        default: ''
+      oci-username:
+        description: 'Username for OCI registry authentication'
+        required: false
+        type: string
+        default: ''
+      oci-password:
+        description: 'Password for OCI registry authentication'
+        required: false
+        type: string
+        default: ''
+      values-template:
+        description: 'Path to values template file for envsubst processing'
+        required: false
+        type: string
+        default: ''
+      subchart-paths:
+        description: 'Glob pattern for subchart directories to update dependencies before the main chart'
+        required: false
+        type: string
+        default: ''
+      runner:
+        description: 'GitHub runner to use'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      checkout-repository:
+        description: 'Whether to checkout the repository'
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      release-revision:
+        description: 'Helm release revision number'
+        value: ${{ jobs.helm-deploy.outputs.revision }}
+      release-status:
+        description: 'Status of the Helm release (deployed, failed, etc.)'
+        value: ${{ jobs.helm-deploy.outputs.status }}
+      deployment-time:
+        description: 'Time taken for the deployment'
+        value: ${{ jobs.helm-deploy.outputs.deployment-time }}
+
+jobs:
+  helm-deploy:
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      revision: ${{ steps.deploy.outputs.release-revision }}
+      status: ${{ steps.deploy.outputs.release-status }}
+      deployment-time: ${{ steps.deploy.outputs.deployment-time }}
+    steps:
+      - name: Checkout repository
+        if: inputs.checkout-repository
+        uses: actions/checkout@v4
+
+      - name: Deploy Helm chart
+        id: deploy
+        uses: hmcts/cnp-githubactions-library/helm-deploy-openid@main
+        with:
+          azure-client-id: ${{ inputs.azureClientId }}
+          azure-tenant-id: ${{ inputs.azureTenantId }}
+          environment: ${{ inputs.environment }}
+          team-name: ${{ inputs.team-name }}
+          application-name: ${{ inputs.application-name }}
+          release-name: ${{ inputs.release-name }}
+          namespace: ${{ inputs.namespace }}
+          chart: ${{ inputs.chart }}
+          values-files: ${{ inputs.values-files }}
+          set: ${{ inputs.set }}
+          set-string: ${{ inputs.set-string }}
+          timeout: ${{ inputs.timeout }}
+          dry-run: ${{ inputs.dry-run }}
+          oci-registry: ${{ inputs.oci-registry }}
+          oci-username: ${{ inputs.oci-username }}
+          oci-password: ${{ inputs.oci-password }}
+          values-template: ${{ inputs.values-template }}
+          subchart-paths: ${{ inputs.subchart-paths }}
