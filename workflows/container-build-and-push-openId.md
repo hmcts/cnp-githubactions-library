@@ -54,8 +54,8 @@ jobs:
         ${{ github.sha }}
       platforms: linux/amd64,linux/arm64
       registry-name: myacrname
-      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
-      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
       build-args: |
         VERSION=${{ github.sha }}
         BUILD_DATE=${{ github.event.head_commit.timestamp }}
@@ -96,8 +96,8 @@ jobs:
     with:
       image-name: my-app
       registry-name: hmctsprod
-      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
-      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 ```
 
 ### Multi-Platform Build with Custom Tags
@@ -114,8 +114,8 @@ jobs:
         ${{ github.sha }}
       platforms: linux/amd64,linux/arm64
       registry-name: hmctsprod
-      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
-      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 ```
 
 ### Build with Custom Context and Dockerfile
@@ -129,8 +129,8 @@ jobs:
       dockerfile: ./docker/Dockerfile.prod
       context: ./app
       registry-name: hmctsprod
-      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
-      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 ```
 
 ### Build with Build Arguments
@@ -146,8 +146,8 @@ jobs:
         BUILD_DATE=${{ github.event.head_commit.timestamp }}
         NODE_ENV=production
       registry-name: hmctsprod
-      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
-      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 ```
 
 ### Build Without Pushing (Testing)
@@ -160,8 +160,8 @@ jobs:
       image-name: my-app
       push: false
       registry-name: hmctsprod
-      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
-      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 ```
 
 ## Platform Options
@@ -213,7 +213,7 @@ This workflow uses **OpenID Connect (OIDC)** for keyless authentication:
 3. Store the client ID and tenant ID as **repository secrets** (not organization-level secrets)
 4. Assign the `AcrPush` role to the service principal on your ACR
 
-> **⚠️ Important:** The `vars.AZURE_CLIENT_ID` and `vars.AZURE_TENANT_ID` references in your workflow are **repository-level secrets**. You must set these in your repository's settings (Settings > Secrets and variables > Actions), not at the organization level. Each repository using this workflow needs its own Azure credentials.
+> **⚠️ Important:** The `secrets.AZURE_CLIENT_ID` and `secrets.AZURE_TENANT_ID` references in your workflow are **repository-level secrets**. You must set these in your repository's settings (Settings > Secrets and variables > Actions), not at the organization level. Each repository using this workflow needs its own Azure credentials.
 
 See [Azure Login Action Documentation](https://github.com/Azure/login#configure-deployment-credentials) for detailed setup instructions.
 
