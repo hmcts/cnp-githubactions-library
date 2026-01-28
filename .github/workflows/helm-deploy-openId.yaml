@@ -1,8 +1,17 @@
-name: Helm Deploy
+name: Helm Deploy (OpenID)
 
 on:
   workflow_call:
     inputs:
+      azureClientId:
+        description: 'The client ID of the service principal to be used for OIDC login'
+        required: true
+        type: string
+      azureTenantId:
+        description: 'The tenant ID that hosts the service principal'
+        required: false
+        type: string
+        default: '531ff96d-0ae9-462a-8d2d-bec7c0b42082'
       environment:
         description: 'Azure environment prefix (e.g., cft-preview-01, cft-aat-00). Cluster and resource group are derived as {environment}-aks and {environment}-rg'
         required: true
@@ -54,17 +63,17 @@ on:
         type: boolean
         default: false
       oci-registry:
-        description: 'OCI registry URL for chart dependencies. Uses secret.OCI_REGISTRY if not provided'
+        description: 'OCI registry URL for chart dependencies'
         required: false
         type: string
         default: ''
       oci-username:
-        description: 'Username for OCI registry authentication. Uses secret.OCI_USERNAME if not provided'
+        description: 'Username for OCI registry authentication'
         required: false
         type: string
         default: ''
       oci-password:
-        description: 'Password for OCI registry authentication. Uses secret.OCI_PASSWORD if not provided'
+        description: 'Password for OCI registry authentication'
         required: false
         type: string
         default: ''
@@ -88,19 +97,6 @@ on:
         required: false
         type: boolean
         default: true
-    secrets:
-      AZURE_CREDENTIALS:
-        description: 'Azure service principal credentials (JSON format)'
-        required: true
-      OCI_REGISTRY:
-        description: 'OCI registry URL (optional, overridden by oci-registry input)'
-        required: false
-      OCI_USERNAME:
-        description: 'OCI registry username (optional, overridden by oci-username input)'
-        required: false
-      OCI_PASSWORD:
-        description: 'OCI registry password (optional, overridden by oci-password input)'
-        required: false
     outputs:
       release-revision:
         description: 'Helm release revision number'
@@ -115,6 +111,9 @@ on:
 jobs:
   helm-deploy:
     runs-on: ${{ inputs.runner }}
+    permissions:
+      id-token: write
+      contents: read
     outputs:
       revision: ${{ steps.deploy.outputs.release-revision }}
       status: ${{ steps.deploy.outputs.release-status }}
@@ -124,38 +123,15 @@ jobs:
         if: inputs.checkout-repository
         uses: actions/checkout@v4
 
-      - name: Determine OCI configuration
-        id: oci-config
-        shell: bash
-        run: |
-          # Priority: inputs > secrets
-          OCI_REGISTRY="${{ inputs.oci-registry }}"
-          if [ -z "$OCI_REGISTRY" ]; then
-            OCI_REGISTRY="${{ secrets.OCI_REGISTRY }}"
-          fi
-
-          OCI_USERNAME="${{ inputs.oci-username }}"
-          if [ -z "$OCI_USERNAME" ]; then
-            OCI_USERNAME="${{ secrets.OCI_USERNAME }}"
-          fi
-
-          OCI_PASSWORD="${{ inputs.oci-password }}"
-          if [ -z "$OCI_PASSWORD" ]; then
-            OCI_PASSWORD="${{ secrets.OCI_PASSWORD }}"
-          fi
-
-          echo "oci-registry=$OCI_REGISTRY" >> $GITHUB_OUTPUT
-          echo "oci-username=$OCI_USERNAME" >> $GITHUB_OUTPUT
-          echo "oci-password=$OCI_PASSWORD" >> $GITHUB_OUTPUT
-
       - name: Deploy Helm chart
         id: deploy
-        uses: hmcts/cnp-githubactions-library/helm-deploy@main
+        uses: hmcts/cnp-githubactions-library/helm-deploy-openid@main
         with:
+          azure-client-id: ${{ inputs.azureClientId }}
+          azure-tenant-id: ${{ inputs.azureTenantId }}
           environment: ${{ inputs.environment }}
           team-name: ${{ inputs.team-name }}
           application-name: ${{ inputs.application-name }}
-          azure-credentials: ${{ secrets.AZURE_CREDENTIALS }}
           release-name: ${{ inputs.release-name }}
           namespace: ${{ inputs.namespace }}
           chart: ${{ inputs.chart }}
@@ -164,8 +140,8 @@ jobs:
           set-string: ${{ inputs.set-string }}
           timeout: ${{ inputs.timeout }}
           dry-run: ${{ inputs.dry-run }}
-          oci-registry: ${{ steps.oci-config.outputs.oci-registry }}
-          oci-username: ${{ steps.oci-config.outputs.oci-username }}
-          oci-password: ${{ steps.oci-config.outputs.oci-password }}
+          oci-registry: ${{ inputs.oci-registry }}
+          oci-username: ${{ inputs.oci-username }}
+          oci-password: ${{ inputs.oci-password }}
           values-template: ${{ inputs.values-template }}
           subchart-paths: ${{ inputs.subchart-paths }}
