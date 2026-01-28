@@ -84,8 +84,8 @@ jobs:
   build-and-push:
     runs-on: ${{ inputs.runner }}
     outputs:
-      digest: ${{ steps.build-push.outputs.digest }}
-      tags: ${{ steps.build-push.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
+      tags: ${{ steps.build.outputs.tags }}
     steps:
       - name: Checkout repository
         if: inputs.checkout-repository
@@ -100,32 +100,32 @@ jobs:
           if [ -z "$REGISTRY" ]; then
             REGISTRY="${{ secrets.REGISTRY_LOGIN_SERVER }}"
           fi
-          
+
           USERNAME="${{ inputs.registry-username }}"
           if [ -z "$USERNAME" ]; then
             USERNAME="${{ secrets.REGISTRY_USERNAME }}"
           fi
-          
+
           PASSWORD="${{ inputs.registry-password }}"
           if [ -z "$PASSWORD" ]; then
             PASSWORD="${{ secrets.REGISTRY_PASSWORD }}"
           fi
-          
+
           echo "registry=$REGISTRY" >> $GITHUB_OUTPUT
           echo "username=$USERNAME" >> $GITHUB_OUTPUT
           echo "password=$PASSWORD" >> $GITHUB_OUTPUT
 
-      - name: Build and push container
-        id: build-push
+      - name: Build and push container image
+        id: build
         uses: hmcts/cnp-githubactions-library/container-build-push@main
         with:
-          dockerfile: ${{ inputs.dockerfile }}
-          context: ${{ inputs.context }}
           registry: ${{ steps.registry-vars.outputs.registry }}
           registry-username: ${{ steps.registry-vars.outputs.username }}
           registry-password: ${{ steps.registry-vars.outputs.password }}
           image-name: ${{ inputs.image-name }}
           image-tags: ${{ inputs.image-tags }}
-          build-args: ${{ inputs.build-args }}
+          dockerfile: ${{ inputs.dockerfile }}
+          context: ${{ inputs.context }}
           platforms: ${{ inputs.platforms }}
+          build-args: ${{ inputs.build-args }}
           push: ${{ inputs.push }}

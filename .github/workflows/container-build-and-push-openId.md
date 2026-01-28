@@ -2,18 +2,18 @@
 
 Build and push container images to Azure Container Registry (ACR) using OpenID Connect (OIDC) authentication with support for multi-platform builds.
 
-**Workflow File:** `.github/workflows/container-build-and-push-openId.yaml`
+**Workflow File:** `workflows/container-build-and-push-openId.yaml`
 
-> **💡 Need More Flexibility?** This reusable workflow is great for simple, standardized builds with OIDC authentication. If you need to add custom steps before/after the build or integrate with other actions, check out the [composite action](../../container-build-push/README.md) which provides the same core logic in a more flexible format.
+> **💡 Need More Flexibility?** This reusable workflow is great for simple, standardized builds with OIDC authentication. If you need to add custom steps before/after the build or integrate with other actions, consider using the [docker/build-push-action](https://github.com/docker/build-push-action) directly in your workflow.
 
 ## Features
 
 - OpenID Connect (OIDC) authentication with Azure (no stored secrets needed)
 - Multi-platform build support (linux/amd64, linux/arm64, etc.)
-- Docker BuildKit caching for faster builds
+- Docker BuildKit caching for faster builds via GitHub Actions cache
 - Customisable tags, build args, and context
-- Automatic metadata extraction
-- Detailed build summary output
+- Automatic metadata extraction and label generation
+- Detailed build summary output on GitHub Actions
 - Automatic ACR login via Azure CLI
 
 ## When to Use
@@ -24,12 +24,6 @@ Build and push container images to Azure Container Registry (ACR) using OpenID C
 - You don't need custom pre/post build steps
 - You want optional repository checkout
 - You're pushing to Azure Container Registry (ACR)
-
-**Use the [composite action](../../container-build-push/README.md) when:**
-- You need to add custom steps before or after the build
-- You want to integrate with other actions in the same job
-- You need more control over the workflow structure
-- You're building multiple images in one job
 
 ## Prerequisites
 
@@ -52,16 +46,16 @@ on:
 
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push-openId.yaml@main
+    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-application
       image-tags: |
         latest
         ${{ github.sha }}
       platforms: linux/amd64,linux/arm64
-      azureContainerRegistryName: myacrname
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: myacrname
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
       build-args: |
         VERSION=${{ github.sha }}
         BUILD_DATE=${{ github.event.head_commit.timestamp }}
@@ -80,9 +74,9 @@ jobs:
 | `push` | Push image to registry | No | `true` |
 | `runner` | GitHub runner to use | No | `ubuntu-latest` |
 | `checkout-repository` | Whether to checkout the repository | No | `true` |
-| `azureContainerRegistryName` | Name of the ACR (without .azurecr.io) | **Yes** | - |
-| `azureClientId` | Client ID of the service principal for OIDC | **Yes** | - |
-| `azureTenantId` | Tenant ID hosting the service principal | No | `531ff96d-0ae9-462a-8d2d-bec7c0b42082` |
+| `registry-name` | Name of the ACR (without .azurecr.io) | **Yes** | - |
+| `azure-client-id` | Client ID of the service principal for OIDC | **Yes** | - |
+| `azure-tenant-id` | Tenant ID hosting the service principal | No | `531ff96d-0ae9-462a-8d2d-bec7c0b42082` |
 
 ## Outputs
 
@@ -98,12 +92,12 @@ jobs:
 ```yaml
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push-openId.yaml@main
+    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-app
-      azureContainerRegistryName: hmctsprod
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: hmctsprod
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 ```
 
 ### Multi-Platform Build with Custom Tags
@@ -111,7 +105,7 @@ jobs:
 ```yaml
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push-openId.yaml@main
+    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-app
       image-tags: |
@@ -119,9 +113,9 @@ jobs:
         v1.0.0
         ${{ github.sha }}
       platforms: linux/amd64,linux/arm64
-      azureContainerRegistryName: hmctsprod
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: hmctsprod
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 ```
 
 ### Build with Custom Context and Dockerfile
@@ -129,14 +123,14 @@ jobs:
 ```yaml
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push-openId.yaml@main
+    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-app
       dockerfile: ./docker/Dockerfile.prod
       context: ./app
-      azureContainerRegistryName: hmctsprod
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: hmctsprod
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 ```
 
 ### Build with Build Arguments
@@ -144,16 +138,16 @@ jobs:
 ```yaml
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push-openId.yaml@main
+    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-app
       build-args: |
         VERSION=${{ github.sha }}
         BUILD_DATE=${{ github.event.head_commit.timestamp }}
         NODE_ENV=production
-      azureContainerRegistryName: hmctsprod
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: hmctsprod
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 ```
 
 ### Build Without Pushing (Testing)
@@ -161,13 +155,13 @@ jobs:
 ```yaml
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push-openId.yaml@main
+    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-app
       push: false
-      azureContainerRegistryName: hmctsprod
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: hmctsprod
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 ```
 
 ## Platform Options
@@ -183,6 +177,18 @@ You can specify multiple platforms separated by commas:
 ```yaml
 platforms: linux/amd64,linux/arm64
 ```
+
+## Workflow Steps
+
+The workflow executes the following steps:
+
+1. **Checkout repository** - Optionally checks out your repository source code
+2. **Az CLI login** - Authenticates with Azure using OpenID Connect
+3. **ACR Login** - Logs into the Azure Container Registry via Azure CLI
+4. **Set up Docker Buildx** - Prepares the Docker builder for multi-platform builds
+5. **Extract metadata** - Generates tags and labels for the container image
+6. **Build and push** - Builds the container using Docker and pushes to ACR
+7. **Output image information** - Displays build summary in GitHub Actions
 
 ## Authentication Details
 
@@ -211,13 +217,31 @@ This workflow uses **OpenID Connect (OIDC)** for keyless authentication:
 
 See [Azure Login Action Documentation](https://github.com/Azure/login#configure-deployment-credentials) for detailed setup instructions.
 
+## Caching
+
+This workflow uses GitHub Actions cache for Docker builds to speed up repeated builds:
+
+- Cache is stored per branch
+- Builds are significantly faster when layers haven't changed
+- Cache persists for 7 days of inactivity
+
+## Build Summary
+
+The workflow automatically adds a detailed build summary to the GitHub Actions job summary page showing:
+
+- Full image URI
+- Image digest (SHA256 hash)
+- Tags that were applied
+- Target platforms
+- Push status
+
 ## Notes
 
-- The workflow uses Docker BuildKit with GitHub Actions cache for improved build performance
-- Registry URL is automatically constructed as `{azureContainerRegistryName}.azurecr.io`
+- Registry URL is automatically constructed as `{registry-name}.azurecr.io`
 - ACR login is performed automatically via Azure CLI after OIDC authentication
-- The workflow requires `id-token: write` permission for OIDC token generation
-- Build summaries are added to the GitHub Actions summary page for easy reference
+- The workflow uses official Docker actions for building and pushing
+- Metadata is extracted using `docker/metadata-action` for consistent tagging
+- Build cache uses GitHub Actions cache backend for fast builds
 
 ## Troubleshooting
 
@@ -225,16 +249,31 @@ See [Azure Login Action Documentation](https://github.com/Azure/login#configure-
 
 - Verify the service principal has `AcrPush` role on the ACR
 - Check that federated credentials are correctly configured in Entra ID
-- Ensure the `id-token: write` permission is set in the job
+- Ensure the job has `id-token: write` permission (workflow may need explicit `permissions` block)
 
 ### "ACR Login Failed"
 
-- Verify `azureContainerRegistryName` is correct (without `.azurecr.io`)
+- Verify `registry-name` is correct (without `.azurecr.io`)
 - Check that the service principal can authenticate with `az acr login`
 - Verify network connectivity to the ACR endpoint
+- Ensure the service principal is not disabled in Entra ID
 
 ### "Image digest not available"
 
 - Ensure `push: true` (the default)
 - Check that the ACR has sufficient quota/storage
 - Review the build output for any warnings or errors
+- Verify the image name follows ACR naming conventions
+
+### "Build timeout"
+
+- For large images or slow networks, consider increasing the runner timeout
+- Use a larger runner: `linux/arm64` builds may need more resources
+- Split multi-platform builds across multiple jobs
+
+## Related Resources
+
+- [Docker Build Push Action](https://github.com/docker/build-push-action)
+- [Docker Metadata Action](https://github.com/docker/metadata-action)
+- [Azure Login Action](https://github.com/Azure/login)
+- [GitHub Actions - Using OpenID Connect](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect)

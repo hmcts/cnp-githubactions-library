@@ -1,4 +1,4 @@
-name: Container image build and push
+name: Container image build and push (OpenID)
 
 on:
   workflow_call:
@@ -47,15 +47,15 @@ on:
         required: false
         type: boolean
         default: true
-      azureContainerRegistryName:
-        description: 'The name of the Azure Container Registry (ACR) to push the image to'
+      registry-name:
+        description: 'The name of the Azure Container Registry (ACR) to push the image to (without .azurecr.io)'
         required: true
         type: string
-      azureClientId:
-        description: 'The client ID of the service principal to be used for login'
+      azure-client-id:
+        description: 'The client ID of the service principal to be used for OIDC login'
         required: true
         type: string
-      azureTenantId:
+      azure-tenant-id:
         description: 'The tenant ID that hosts the service principal to be used for login'
         required: false
         type: string
@@ -71,60 +71,28 @@ on:
 jobs:
   build-and-push:
     runs-on: ${{ inputs.runner }}
+    permissions:
+      id-token: write
+      contents: read
     outputs:
       digest: ${{ steps.build.outputs.digest }}
-      tags: ${{ steps.meta.outputs.tags }}
-    env:
-      AZURE_CONTAINER_REGISTRY_URL: ${{ inputs.azureContainerRegistryName }}.azurecr.io
+      tags: ${{ steps.build.outputs.tags }}
     steps:
       - name: Checkout repository
         if: inputs.checkout-repository
         uses: actions/checkout@v4
 
-      - name: "Az CLI login"
-        uses: azure/login@v2
-        with:
-          client-id: ${{ inputs.azureClientId }}
-          tenant-id: ${{ inputs.azureTenantId }}
-          allow-no-subscriptions: true
-
-      - name: "ACR Login - ${{ inputs.azureContainerRegistryName }}"
-        run: |
-          az acr login --name ${{ inputs.azureContainerRegistryName }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.AZURE_CONTAINER_REGISTRY_URL }}/${{ inputs.image-name }}
-          tags: ${{ inputs.image-tags }}
-
       - name: Build and push container image
         id: build
-        uses: docker/build-push-action@v5
+        uses: hmcts/cnp-githubactions-library/container-build-push-openid@main
         with:
+          azure-client-id: ${{ inputs.azure-client-id }}
+          azure-tenant-id: ${{ inputs.azure-tenant-id }}
+          registry-name: ${{ inputs.registry-name }}
+          image-name: ${{ inputs.image-name }}
+          image-tags: ${{ inputs.image-tags }}
+          dockerfile: ${{ inputs.dockerfile }}
           context: ${{ inputs.context }}
-          file: ${{ inputs.dockerfile }}
           platforms: ${{ inputs.platforms }}
-          push: ${{ inputs.push }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ inputs.build-args }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Output image information
-        run: |
-          echo "### Container Build Summary 📦" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Image:** \`${{ env.AZURE_CONTAINER_REGISTRY_URL }}/${{ inputs.image-name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Platforms:** \`${{ inputs.platforms }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Pushed:** \`${{ inputs.push }}\`" >> $GITHUB_STEP_SUMMARY
+          push: ${{ inputs.push }}
