@@ -19,6 +19,21 @@ on:
         description: 'Storage account postfix (nonprod, prod) to make mgmtstatestore{nonprod|prod}'
         required: true
         type: string
+      state-store-resource-group:
+        description: 'Override resource group name for Terraform state (default: mgmt-state-store-{storage-account})'
+        required: false
+        type: string
+        default: ''
+      state-store-account-name:
+        description: 'Override storage account name for Terraform state (default: mgmtstatestore{storage-account})'
+        required: false
+        type: string
+        default: ''
+      state-store-container-name:
+        description: 'Override container name for Terraform state (default: mgmtstatestorecontainer{environment})'
+        required: false
+        type: string
+        default: ''
       azure-client-id:
         description: 'Azure client ID for OIDC authentication'
         required: true
@@ -105,6 +120,9 @@ jobs:
           subscription: ${{ inputs.subscription }}
           aks-subscription: ${{ inputs.aks-subscription }}
           storage-account: ${{ inputs.storage-account }}
+          state-store-resource-group: ${{ inputs.state-store-resource-group }}
+          state-store-account-name: ${{ inputs.state-store-account-name }}
+          state-store-container-name: ${{ inputs.state-store-container-name }}
           azure-client-id: ${{ inputs.azure-client-id }}
           azure-tenant-id: ${{ inputs.azure-tenant-id }}
           azure-subscription-id: ${{ inputs.azure-subscription-id }}
