@@ -15,6 +15,18 @@ inputs:
   storage-account:
     description: 'Storage account postfix (nonprod, prod) to make mgmtstatestore{nonprod|prod}'
     required: true
+  state-store-resource-group:
+    description: 'Override resource group name for Terraform state (default: mgmt-state-store-{storage-account})'
+    required: false
+    default: ''
+  state-store-account-name:
+    description: 'Override storage account name for Terraform state (default: mgmtstatestore{storage-account})'
+    required: false
+    default: ''
+  state-store-container-name:
+    description: 'Override container name for Terraform state (default: mgmtstatestorecontainer{environment})'
+    required: false
+    default: ''
   azure-client-id:
     description: 'Azure client ID for OIDC authentication'
     required: true
@@ -121,15 +133,24 @@ runs:
         AKS_SUBSCRIPTION_ID=$(az account show --subscription "${{ inputs.aks-subscription }}" --query id -o tsv)
         echo "id=$AKS_SUBSCRIPTION_ID" >> "$GITHUB_OUTPUT"
 
+    - name: Resolve state store names
+      id: state-store
+      shell: bash
+      run: |
+        RG="${{ inputs.state-store-resource-group }}"
+        SA="${{ inputs.state-store-account-name }}"
+        CN="${{ inputs.state-store-container-name }}"
+        echo "resource-group=${RG:-mgmt-state-store-${{ inputs.storage-account }}}" >> "$GITHUB_OUTPUT"
+        echo "account-name=${SA:-mgmtstatestore${{ inputs.storage-account }}}" >> "$GITHUB_OUTPUT"
+        echo "container-name=${CN:-mgmtstatestorecontainer${{ inputs.environment }}}" >> "$GITHUB_OUTPUT"
+
     - name: Get Storage Account Key
       id: storage-key
       shell: bash
       run: |
-        STORAGE_ACCOUNT="mgmtstatestore${{ inputs.storage-account }}"
-        RESOURCE_GROUP="mgmt-state-store-${{ inputs.storage-account }}"
         KEY=$(az storage account keys list \
-          --account-name "$STORAGE_ACCOUNT" \
-          --resource-group "$RESOURCE_GROUP" \
+          --account-name "${{ steps.state-store.outputs.account-name }}" \
+          --resource-group "${{ steps.state-store.outputs.resource-group }}" \
           --query '[0].value' -o tsv)
         echo "::add-mask::$KEY"
         echo "key=$KEY" >> "$GITHUB_OUTPUT"
@@ -141,9 +162,9 @@ runs:
         ARM_ACCESS_KEY: ${{ steps.storage-key.outputs.key }}
       run: |
         terraform init -reconfigure \
-          -backend-config="storage_account_name=mgmtstatestore${{ inputs.storage-account }}" \
-          -backend-config="container_name=mgmtstatestorecontainer${{ inputs.environment }}" \
-          -backend-config="resource_group_name=mgmt-state-store-${{ inputs.storage-account }}" \
+          -backend-config="storage_account_name=${{ steps.state-store.outputs.account-name }}" \
+          -backend-config="container_name=${{ steps.state-store.outputs.container-name }}" \
+          -backend-config="resource_group_name=${{ steps.state-store.outputs.resource-group }}" \
           -backend-config="key=${{ github.event.repository.name }}/${{ inputs.environment }}/terraform.tfstate"
 
     - name: Terraform Validate
