@@ -65,6 +65,14 @@ inputs:
     description: 'Glob pattern for subchart directories to update dependencies before the main chart (e.g., apps/*/helm)'
     required: false
     default: ''
+  global-environment:
+    description: 'Value for global.environment and global.tags.environment Helm values'
+    required: false
+    default: 'aat'
+  business-area:
+    description: 'Value for global.tags.businessArea Helm value'
+    required: false
+    default: 'CFT'
 
 outputs:
   release-revision:
@@ -184,14 +192,14 @@ runs:
         # Build HMCTS-specific global values for Helm
         HMCTS_SET=""
         HMCTS_SET="$HMCTS_SET --set global.tenantId=531ff96d-0ae9-462a-8d2d-bec7c0b42082"
-        HMCTS_SET="$HMCTS_SET --set global.environment=aat"
+        HMCTS_SET="$HMCTS_SET --set global.environment=${{ inputs.global-environment }}"
         HMCTS_SET="$HMCTS_SET --set global.enableKeyVaults=true"
         HMCTS_SET="$HMCTS_SET --set global.disableTraefikTls=false"
         HMCTS_SET="$HMCTS_SET --set global.tags.teamName=${{ inputs.team-name }}"
         HMCTS_SET="$HMCTS_SET --set global.tags.applicationName=${{ inputs.application-name }}"
         HMCTS_SET="$HMCTS_SET --set global.tags.builtFrom=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
-        HMCTS_SET="$HMCTS_SET --set global.tags.businessArea=CFT"
-        HMCTS_SET="$HMCTS_SET --set global.tags.environment=aat"
+        HMCTS_SET="$HMCTS_SET --set global.tags.businessArea=${{ inputs.business-area }}"
+        HMCTS_SET="$HMCTS_SET --set global.tags.environment=${{ inputs.global-environment }}"
 
         echo "hmcts-set=$HMCTS_SET" >> $GITHUB_OUTPUT
 
