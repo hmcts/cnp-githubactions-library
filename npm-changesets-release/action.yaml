@@ -83,4 +83,9 @@ runs:
         title: ${{ inputs.commit-message }}
       env:
         GITHUB_TOKEN: ${{ github.token }}
+        # NPM_TOKEN is what changesets/action's auth detection reads to decide
+        # between token auth and OIDC trusted publishing. NODE_AUTH_TOKEN is
+        # what the .npmrc written by actions/setup-node references at npm CLI
+        # time. Both intentional — they serve different consumers in the chain.
+        NPM_TOKEN: ${{ inputs.npm-api-token }}
         NODE_AUTH_TOKEN: ${{ inputs.npm-api-token }}
