@@ -75,7 +75,7 @@ jobs:
           fetch-depth: 0
 
       - id: release
-        uses: hmcts/cnp-githubactions-library/npm-changesets-release@main
+        uses: hmcts/cnp-githubactions-library/npm-changesets-release@fix/npm-token-optional
         with:
           node-version: ${{ inputs.node-version }}
           node-version-file: ${{ inputs.node-version-file }}
