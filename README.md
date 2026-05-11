@@ -196,12 +196,12 @@ jobs:
 
       - uses: hmcts/cnp-githubactions-library/npm-changesets-release@main
         with:
-          npm-token: ${{ secrets.NPM_TOKEN }}
+          npm-api-token: ${{ secrets.NPM_API_TOKEN }}
 ```
 
 **Features:**
 - Single workflow handles both version-bumping and publishing
-- Centralised `NPM_TOKEN` plumbing — one place to swap secret names or move to OIDC
+- Centralised `NPM_API_TOKEN` plumbing — one place to swap secret names or move to OIDC
 - Configurable install / version / publish commands (yarn, npm, pnpm)
 - Yarn 4 + Corepack-friendly defaults
 - Outputs `published` / `publishedPackages` / `hasChangesets` for downstream steps

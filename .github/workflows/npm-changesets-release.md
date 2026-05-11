@@ -14,7 +14,7 @@ The mode is chosen automatically by `changesets/action@v1` based on the state of
 ## Features
 
 - Single workflow handles both version-bumping and publishing
-- `secrets: inherit` plumbs the org-level `NPM_TOKEN` automatically — no per-repo wiring of the token name
+- `secrets: inherit` plumbs the org-level `NPM_API_TOKEN` automatically — no per-repo wiring of the token name
 - One place to swap the npm auth mechanism (token → OIDC) when the org migrates
 - Configurable install / version / publish commands (yarn, npm, pnpm)
 - Returns `published` / `publishedPackages` / `hasChangesets` outputs
@@ -25,7 +25,7 @@ The mode is chosen automatically by `changesets/action@v1` based on the state of
 
 - You want "publish on push to master" with minimal boilerplate
 - The release lives in its own job — no other tasks need to run alongside it
-- Your org provides `NPM_TOKEN` as an org-level secret and you can use `secrets: inherit`
+- Your org provides `NPM_API_TOKEN` as an org-level secret and you can use `secrets: inherit`
 
 **Use the [composite action](../../npm-changesets-release/README.md) when:**
 
@@ -57,7 +57,7 @@ That's it. The workflow assumes:
 
 - A `.nvmrc` file at the repo root (otherwise pass `node-version`).
 - Root scripts named `changeset version` and `changeset publish` (the changesets defaults).
-- `NPM_TOKEN` available at the org or repo level.
+- `NPM_API_TOKEN` available at the org or repo level.
 
 ### Custom commands — build before publish
 
@@ -93,7 +93,7 @@ jobs:
     with:
       node-version-file: '.nvmrc'
     secrets:
-      NPM_TOKEN: ${{ secrets.MY_REPO_NPM_TOKEN }}
+      NPM_API_TOKEN: ${{ secrets.MY_REPO_NPM_TOKEN }}
 ```
 
 ### Reading outputs in a downstream job
@@ -130,9 +130,9 @@ jobs:
 
 | Secret | Description | Required |
 |--------|-------------|----------|
-| `NPM_TOKEN` | npm automation token with publish rights for the target scope/packages | No (but publish will fail at runtime without it) |
+| `NPM_API_TOKEN` | npm automation token with publish rights for the target scope/packages | No (but publish will fail at runtime without it) |
 
-`NPM_TOKEN` is declared optional at the `workflow_call` boundary so callers using `secrets: inherit` don't fail validation on repos that haven't configured the secret yet. The downstream `changeset publish` will exit with an authentication error if a real publish is attempted without a valid token, so missing-token failures still surface — just at publish time rather than workflow-load time.
+`NPM_API_TOKEN` is declared optional at the `workflow_call` boundary so callers using `secrets: inherit` don't fail validation on repos that haven't configured the secret yet. The downstream `changeset publish` will exit with an authentication error if a real publish is attempted without a valid token, so missing-token failures still surface — just at publish time rather than workflow-load time.
 
 ## Outputs
 
@@ -144,7 +144,7 @@ jobs:
 
 ## Required repo / org setup
 
-1. **`NPM_TOKEN` secret** at the GitHub org level (`hmcts`), so any repo can use `secrets: inherit`. Granular automation token, scoped to the target npm scope or packages.
+1. **`NPM_API_TOKEN` secret** at the GitHub org level (`hmcts`), so any repo can use `secrets: inherit`. Granular automation token, scoped to the target npm scope or packages.
 2. **Allow Actions to open PRs** — org/repo Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests". The bot needs this to open the Version Packages PR.
 3. **Per-package publishability** — every publishable `package.json` needs `name`, `version`, `files`, `exports`/`main`, and for scoped public packages `publishConfig.access: public`. For provenance attestation (recommended), also add `publishConfig.provenance: true`.
 

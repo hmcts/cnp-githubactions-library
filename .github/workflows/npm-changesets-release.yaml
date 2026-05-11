@@ -44,8 +44,8 @@ on:
         type: string
         default: 'ubuntu-latest'
     secrets:
-      NPM_TOKEN:
-        description: 'npm automation token with publish rights for the target scope/packages. Not required at workflow_call validation time so `secrets: inherit` works on repos without the secret yet; `changeset publish` will fail at runtime if a real publish is attempted without it.'
+      NPM_API_TOKEN:
+        description: 'npm automation token with publish rights for the target scope/packages. Matches the existing HMCTS org-level secret name (also used by the hmcts/.github "Publish Node.js Library" starter template). Not required at workflow_call validation time so `secrets: inherit` works on repos without the secret yet; `changeset publish` will fail at runtime if a real publish is attempted without it.'
         required: false
     outputs:
       published:
@@ -84,4 +84,4 @@ jobs:
           publish-command: ${{ inputs.publish-command }}
           commit-message: ${{ inputs.commit-message }}
           working-directory: ${{ inputs.working-directory }}
-          npm-token: ${{ secrets.NPM_TOKEN }}
+          npm-api-token: ${{ secrets.NPM_API_TOKEN }}

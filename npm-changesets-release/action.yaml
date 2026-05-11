@@ -31,8 +31,8 @@ inputs:
     description: 'Commit message and PR title for the Version Packages PR'
     required: false
     default: 'chore: version packages'
-  npm-token:
-    description: 'npm token with publish rights for the target scope/packages. Optional so a calling reusable workflow can use `secrets: inherit` even when the secret is not yet configured; `changeset publish` will fail at runtime if a real publish is attempted without it.'
+  npm-api-token:
+    description: 'npm automation token with publish rights for the target scope/packages. Named to match the HMCTS-conventional `NPM_API_TOKEN` org/repo secret. Optional so a calling reusable workflow can use `secrets: inherit` even when the secret is not yet configured; `changeset publish` will fail at runtime if a real publish is attempted without it.'
     required: false
     default: ''
   working-directory:
@@ -83,5 +83,5 @@ runs:
         title: ${{ inputs.commit-message }}
       env:
         GITHUB_TOKEN: ${{ github.token }}
-        NPM_TOKEN: ${{ inputs.npm-token }}
-        NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
+        NPM_TOKEN: ${{ inputs.npm-api-token }}
+        NODE_AUTH_TOKEN: ${{ inputs.npm-api-token }}

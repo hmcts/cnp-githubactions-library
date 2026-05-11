@@ -10,7 +10,7 @@ Both modes share the same workflow; the action picks the right one based on the 
 ## Features
 
 - Single workflow handles both version-bumping and publishing
-- Centralised npm-token plumbing (one place to swap the secret name or move to OIDC)
+- Centralised npm-api-token plumbing (one place to swap the secret name or move to OIDC)
 - Configurable install / version / publish commands (works with yarn, npm, pnpm)
 - Pass-through to `changesets/action@v1` with sensible Yarn 4 defaults
 - Returns `published` / `publishedPackages` / `hasChangesets` outputs for downstream steps
@@ -43,7 +43,7 @@ jobs:
 
       - uses: hmcts/cnp-githubactions-library/npm-changesets-release@main
         with:
-          npm-token: ${{ secrets.NPM_TOKEN }}
+          npm-api-token: ${{ secrets.NPM_API_TOKEN }}
 ```
 
 ### Custom commands (e.g. build before publish)
@@ -51,7 +51,7 @@ jobs:
 ```yaml
 - uses: hmcts/cnp-githubactions-library/npm-changesets-release@main
   with:
-    npm-token: ${{ secrets.NPM_TOKEN }}
+    npm-api-token: ${{ secrets.NPM_API_TOKEN }}
     version-command: 'yarn version-packages'   # e.g. "changeset version && yarn install --mode=update-lockfile"
     publish-command: 'yarn release'            # e.g. "yarn build && changeset publish"
 ```
@@ -83,7 +83,7 @@ jobs:
 
       - uses: hmcts/cnp-githubactions-library/npm-changesets-release@main
         with:
-          npm-token: ${{ secrets.NPM_TOKEN }}
+          npm-api-token: ${{ secrets.NPM_API_TOKEN }}
           setup-node: 'false'
           install-command: ':'        # already installed
 ```
@@ -94,7 +94,7 @@ jobs:
 - id: release
   uses: hmcts/cnp-githubactions-library/npm-changesets-release@main
   with:
-    npm-token: ${{ secrets.NPM_TOKEN }}
+    npm-api-token: ${{ secrets.NPM_API_TOKEN }}
 
 - name: Notify slack of published packages
   if: steps.release.outputs.published == 'true'
@@ -106,7 +106,7 @@ jobs:
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `npm-token` | npm token with publish rights for the target scope/packages. Optional so the parent reusable workflow can use `secrets: inherit`; if empty, `changeset publish` will fail at runtime when it tries to authenticate. | No | (empty) |
+| `npm-api-token` | npm token with publish rights for the target scope/packages. Optional so the parent reusable workflow can use `secrets: inherit`; if empty, `changeset publish` will fail at runtime when it tries to authenticate. | No | (empty) |
 | `node-version` | Node.js version (overridden by `node-version-file` if both set) | No | (empty) |
 | `node-version-file` | Path to a Node version file | No | `.nvmrc` |
 | `setup-node` | Whether to run `actions/setup-node`. Set `false` if Node is already configured. | No | `true` |
@@ -135,7 +135,7 @@ permissions:
 
 ## Required repo / org setup
 
-1. **`NPM_TOKEN` secret** — an automation token scoped to the target npm scope/packages. Recommended at the GitHub org level so multiple repos can share it.
+1. **`NPM_API_TOKEN` secret** — an automation token scoped to the target npm scope/packages. Recommended at the GitHub org level so multiple repos can share it.
 2. **Allow Actions to open PRs** — repo or org Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests".
 3. **Per-package publishability** — each publishable `package.json` needs `name`, `version`, `files`, `exports`/`main`, and (for scoped public packages) `publishConfig.access: public`. For provenance attestation, also add `publishConfig.provenance: true`.
 
@@ -144,7 +144,7 @@ permissions:
 | | Composite Action | Reusable Workflow |
 |---|------------------|-------------------|
 | Where it runs | A step inside your job | A whole job |
-| Secret plumbing | You pass `npm-token` explicitly | Calling workflow can use `secrets: inherit` |
+| Secret plumbing | You pass `npm-api-token` explicitly | Calling workflow can use `secrets: inherit` |
 | Use when | You need to interleave other steps in the same job (e.g. run tests before publishing, post to Slack after) | You just want "publish on push to master" with minimal boilerplate |
 
 The reusable workflow ([`.github/workflows/npm-changesets-release.yaml`](../.github/workflows/npm-changesets-release.md)) wraps this action and is the recommended entrypoint for most consumers.
