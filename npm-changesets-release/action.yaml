@@ -83,5 +83,4 @@ runs:
         title: ${{ inputs.commit-message }}
       env:
         GITHUB_TOKEN: ${{ github.token }}
-        NPM_TOKEN: ${{ inputs.npm-api-token }}
         NODE_AUTH_TOKEN: ${{ inputs.npm-api-token }}
