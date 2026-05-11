@@ -45,8 +45,8 @@ on:
         default: 'ubuntu-latest'
     secrets:
       NPM_TOKEN:
-        description: 'npm automation token with publish rights for the target scope/packages'
-        required: true
+        description: 'npm automation token with publish rights for the target scope/packages. Not required at workflow_call validation time so `secrets: inherit` works on repos without the secret yet; `changeset publish` will fail at runtime if a real publish is attempted without it.'
+        required: false
     outputs:
       published:
         description: 'Whether packages were published in this run ("true" or "false")'

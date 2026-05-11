@@ -130,7 +130,9 @@ jobs:
 
 | Secret | Description | Required |
 |--------|-------------|----------|
-| `NPM_TOKEN` | npm automation token with publish rights for the target scope/packages | **Yes** |
+| `NPM_TOKEN` | npm automation token with publish rights for the target scope/packages | No (but publish will fail at runtime without it) |
+
+`NPM_TOKEN` is declared optional at the `workflow_call` boundary so callers using `secrets: inherit` don't fail validation on repos that haven't configured the secret yet. The downstream `changeset publish` will exit with an authentication error if a real publish is attempted without a valid token, so missing-token failures still surface — just at publish time rather than workflow-load time.
 
 ## Outputs
 

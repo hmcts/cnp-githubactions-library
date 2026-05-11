@@ -106,7 +106,7 @@ jobs:
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `npm-token` | npm token with publish rights for the target scope/packages | **Yes** | - |
+| `npm-token` | npm token with publish rights for the target scope/packages. Optional so the parent reusable workflow can use `secrets: inherit`; if empty, `changeset publish` will fail at runtime when it tries to authenticate. | No | (empty) |
 | `node-version` | Node.js version (overridden by `node-version-file` if both set) | No | (empty) |
 | `node-version-file` | Path to a Node version file | No | `.nvmrc` |
 | `setup-node` | Whether to run `actions/setup-node`. Set `false` if Node is already configured. | No | `true` |

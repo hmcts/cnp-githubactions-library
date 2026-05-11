@@ -32,8 +32,9 @@ inputs:
     required: false
     default: 'chore: version packages'
   npm-token:
-    description: 'npm token with publish rights for the target scope/packages'
-    required: true
+    description: 'npm token with publish rights for the target scope/packages. Optional so a calling reusable workflow can use `secrets: inherit` even when the secret is not yet configured; `changeset publish` will fail at runtime if a real publish is attempted without it.'
+    required: false
+    default: ''
   working-directory:
     description: 'Working directory'
     required: false
