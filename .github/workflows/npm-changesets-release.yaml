@@ -1,0 +1,87 @@
+name: npm changesets release
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version (overridden by node-version-file if both are set)'
+        required: false
+        type: string
+        default: ''
+      node-version-file:
+        description: 'Path to a Node version file (e.g. .nvmrc)'
+        required: false
+        type: string
+        default: '.nvmrc'
+      install-command:
+        description: 'Command to install dependencies'
+        required: false
+        type: string
+        default: 'yarn install --immutable'
+      version-command:
+        description: 'Command for the version step (apply pending changesets, refresh lockfile)'
+        required: false
+        type: string
+        default: 'yarn changeset version'
+      publish-command:
+        description: 'Command for the publish step (build + publish)'
+        required: false
+        type: string
+        default: 'yarn changeset publish'
+      commit-message:
+        description: 'Commit message and PR title for the Version Packages PR'
+        required: false
+        type: string
+        default: 'chore: version packages'
+      working-directory:
+        description: 'Working directory'
+        required: false
+        type: string
+        default: '.'
+      runner:
+        description: 'GitHub runner to use'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      NPM_TOKEN:
+        description: 'npm automation token with publish rights for the target scope/packages'
+        required: true
+    outputs:
+      published:
+        description: 'Whether packages were published in this run ("true" or "false")'
+        value: ${{ jobs.release.outputs.published }}
+      publishedPackages:
+        description: 'JSON array of published packages (name, version)'
+        value: ${{ jobs.release.outputs.publishedPackages }}
+      hasChangesets:
+        description: 'Whether pending changesets exist on the current ref ("true" or "false")'
+        value: ${{ jobs.release.outputs.hasChangesets }}
+
+jobs:
+  release:
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: write          # tag + commit the Version Packages PR
+      pull-requests: write     # open/update the Version Packages PR
+      id-token: write          # npm provenance attestation
+    outputs:
+      published: ${{ steps.release.outputs.published }}
+      publishedPackages: ${{ steps.release.outputs.publishedPackages }}
+      hasChangesets: ${{ steps.release.outputs.hasChangesets }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: release
+        uses: hmcts/cnp-githubactions-library/npm-changesets-release@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          node-version-file: ${{ inputs.node-version-file }}
+          install-command: ${{ inputs.install-command }}
+          version-command: ${{ inputs.version-command }}
+          publish-command: ${{ inputs.publish-command }}
+          commit-message: ${{ inputs.commit-message }}
+          working-directory: ${{ inputs.working-directory }}
+          npm-token: ${{ secrets.NPM_TOKEN }}

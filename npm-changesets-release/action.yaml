@@ -1,0 +1,86 @@
+name: 'npm changesets release'
+description: 'Run changesets to open a Version Packages PR or publish packages to npm.'
+author: 'HMCTS'
+
+inputs:
+  node-version:
+    description: 'Node.js version (overridden by node-version-file if both are set)'
+    required: false
+    default: ''
+  node-version-file:
+    description: 'Path to a Node version file (e.g. .nvmrc)'
+    required: false
+    default: '.nvmrc'
+  setup-node:
+    description: 'Whether to run actions/setup-node. Set to false if the calling job has already configured Node.'
+    required: false
+    default: 'true'
+  install-command:
+    description: 'Command to install dependencies before running changesets'
+    required: false
+    default: 'yarn install --immutable'
+  version-command:
+    description: 'Command for the version step (applies pending changesets, bumps versions, regenerates the lockfile)'
+    required: false
+    default: 'yarn changeset version'
+  publish-command:
+    description: 'Command for the publish step (runs after the Version Packages PR is merged)'
+    required: false
+    default: 'yarn changeset publish'
+  commit-message:
+    description: 'Commit message and PR title for the Version Packages PR'
+    required: false
+    default: 'chore: version packages'
+  npm-token:
+    description: 'npm token with publish rights for the target scope/packages'
+    required: true
+  working-directory:
+    description: 'Working directory'
+    required: false
+    default: '.'
+
+outputs:
+  published:
+    description: 'Whether packages were published in this run ("true" or "false")'
+    value: ${{ steps.changesets.outputs.published }}
+  publishedPackages:
+    description: 'JSON array of published packages (name, version)'
+    value: ${{ steps.changesets.outputs.publishedPackages }}
+  hasChangesets:
+    description: 'Whether pending changesets exist on the current ref ("true" or "false")'
+    value: ${{ steps.changesets.outputs.hasChangesets }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Enable corepack
+      shell: bash
+      run: corepack enable
+
+    - name: Set up Node
+      if: inputs.setup-node == 'true'
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        node-version-file: ${{ inputs.node-version-file }}
+        registry-url: 'https://registry.npmjs.org'
+        cache: 'yarn'
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: ${{ inputs.install-command }}
+
+    - name: Run changesets
+      id: changesets
+      uses: changesets/action@v1
+      with:
+        cwd: ${{ inputs.working-directory }}
+        version: ${{ inputs.version-command }}
+        publish: ${{ inputs.publish-command }}
+        commit: ${{ inputs.commit-message }}
+        title: ${{ inputs.commit-message }}
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        NPM_TOKEN: ${{ inputs.npm-token }}
+        NODE_AUTH_TOKEN: ${{ inputs.npm-token }}

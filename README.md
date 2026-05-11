@@ -158,6 +158,54 @@ jobs:
 | Integration with other actions | ❌ | ✅ |
 | Matrix strategy deployments | ❌ | ✅ |
 
+### npm Changesets Release
+
+Publish JavaScript packages to npm from a monorepo using [changesets](https://github.com/changesets/changesets). On every push to the release branch the workflow either upserts a "Version Packages" pull request (when pending `.changeset/*.md` files exist) or publishes to npm + creates GitHub releases (when versions are ahead of the registry).
+
+**Available in Two Formats:**
+
+#### 1. Reusable Workflow (Simple, Standardised)
+
+📖 **[View workflow documentation](.github/workflows/npm-changesets-release.md)**
+
+```yaml
+jobs:
+  release:
+    uses: hmcts/cnp-githubactions-library/.github/workflows/npm-changesets-release.yaml@main
+    secrets: inherit
+```
+
+#### 2. Composite Action (Flexible, Extensible)
+
+📖 **[View action documentation](npm-changesets-release/README.md)**
+
+```yaml
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - run: yarn test                # run tests before publishing
+
+      - uses: hmcts/cnp-githubactions-library/npm-changesets-release@main
+        with:
+          npm-token: ${{ secrets.NPM_TOKEN }}
+```
+
+**Features:**
+- Single workflow handles both version-bumping and publishing
+- Centralised `NPM_TOKEN` plumbing — one place to swap secret names or move to OIDC
+- Configurable install / version / publish commands (yarn, npm, pnpm)
+- Yarn 4 + Corepack-friendly defaults
+- Outputs `published` / `publishedPackages` / `hasChangesets` for downstream steps
+
 ## 📖 Usage
 
 ### Using Reusable Workflows
