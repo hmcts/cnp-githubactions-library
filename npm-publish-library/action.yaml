@@ -1,0 +1,136 @@
+name: 'npm publish library'
+description: 'Run release-please to manage versions + changelogs from Conventional Commits, and publish bumped packages to the HMCTS Azure Artifacts npm feed.'
+author: 'HMCTS'
+
+inputs:
+  release-please-token:
+    description: 'GitHub token release-please uses to open/merge the release PR and push tags. Defaults to the workflow token.'
+    required: false
+    default: ${{ github.token }}
+  release-please-config-file:
+    description: 'Path to the release-please config file.'
+    required: false
+    default: 'release-please-config.json'
+  release-please-manifest-file:
+    description: 'Path to the release-please manifest file.'
+    required: false
+    default: '.release-please-manifest.json'
+  node-version:
+    description: 'Node.js version (overridden by node-version-file if both are set)'
+    required: false
+    default: ''
+  node-version-file:
+    description: 'Path to a Node version file (e.g. .nvmrc)'
+    required: false
+    default: '.nvmrc'
+  setup-node:
+    description: 'Whether to run actions/setup-node. Set to false if the calling job has already configured Node.'
+    required: false
+    default: 'true'
+  install-command:
+    description: 'Command to install dependencies before publishing.'
+    required: false
+    default: 'yarn install --immutable'
+  build-command:
+    description: 'Command to build packages before publishing. Set to ":" to skip.'
+    required: false
+    default: 'yarn build'
+  azure-artifact-username:
+    description: 'Username for the HMCTS Azure Artifacts feed. Optional so a calling reusable workflow can use `secrets: inherit` even when the secret is not yet configured; publish will fail at runtime if a real publish is attempted without it. Defaults to "github" when empty.'
+    required: false
+    default: ''
+  azure-artifact-token:
+    description: 'PAT for the HMCTS Azure Artifacts feed with Packaging (Read & Write) on hmcts-lib. Same secret HMCTS Gradle publish workflows consume. Optional so a calling reusable workflow can use `secrets: inherit` even when the secret is not yet configured; publish will fail at runtime if a real publish is attempted without it.'
+    required: false
+    default: ''
+  azure-artifact-feed-url:
+    description: 'Azure Artifacts npm feed URL. Defaults to the shared HMCTS hmcts-lib feed.'
+    required: false
+    default: 'https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/'
+  npm-scope:
+    description: 'Optional npm scope (e.g. "@hmcts-cft"). When set, writes "<scope>:registry=<feed>" into the runtime .npmrc so scoped packages route to the Azure feed even if their package.json is missing publishConfig.registry.'
+    required: false
+    default: ''
+
+outputs:
+  releases_created:
+    description: 'Whether any releases were created in this run ("true" or "false").'
+    value: ${{ steps.release.outputs.releases_created }}
+  paths_released:
+    description: 'JSON array of paths whose packages were released.'
+    value: ${{ steps.release.outputs.paths_released }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: release
+      uses: googleapis/release-please-action@v4
+      with:
+        token: ${{ inputs.release-please-token }}
+        config-file: ${{ inputs.release-please-config-file }}
+        manifest-file: ${{ inputs.release-please-manifest-file }}
+
+    - name: Enable corepack
+      if: steps.release.outputs.releases_created == 'true'
+      shell: bash
+      run: corepack enable
+
+    - name: Set up Node
+      if: steps.release.outputs.releases_created == 'true' && inputs.setup-node == 'true'
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        node-version-file: ${{ inputs.node-version-file }}
+        cache: 'yarn'
+
+    - name: Configure npm authentication for Azure Artifacts
+      if: steps.release.outputs.releases_created == 'true'
+      shell: bash
+      env:
+        AZURE_DEVOPS_ARTIFACT_USERNAME: ${{ inputs.azure-artifact-username }}
+        AZURE_DEVOPS_ARTIFACT_TOKEN: ${{ inputs.azure-artifact-token }}
+        FEED_URL: ${{ inputs.azure-artifact-feed-url }}
+        NPM_SCOPE: ${{ inputs.npm-scope }}
+      run: |
+        token_b64="$(printf %s "$AZURE_DEVOPS_ARTIFACT_TOKEN" | base64 | tr -d '\n')"
+        username="${AZURE_DEVOPS_ARTIFACT_USERNAME:-github}"
+        feed="${FEED_URL%/}/"
+        # Strip the scheme to build the npm-style "//host/path/" auth keys.
+        feed_no_scheme="${feed#https:}"
+        cat > "$HOME/.npmrc" <<EOF
+        registry=${feed}
+        always-auth=true
+        ${feed_no_scheme}:username=${username}
+        ${feed_no_scheme}:_password=${token_b64}
+        ${feed_no_scheme}:email=github-actions@hmcts.net
+        EOF
+        if [ -n "$NPM_SCOPE" ]; then
+          # Defend against scoped packages whose package.json is missing
+          # publishConfig.registry — npm picks @<scope>:registry over the
+          # default `registry=` line.
+          scope="${NPM_SCOPE#@}"
+          echo "@${scope}:registry=${feed}" >> "$HOME/.npmrc"
+        fi
+
+    - name: Install dependencies
+      if: steps.release.outputs.releases_created == 'true'
+      shell: bash
+      run: ${{ inputs.install-command }}
+
+    - name: Build packages
+      if: steps.release.outputs.releases_created == 'true'
+      shell: bash
+      run: ${{ inputs.build-command }}
+
+    - name: Publish released packages
+      if: steps.release.outputs.releases_created == 'true'
+      shell: bash
+      env:
+        PATHS_RELEASED: ${{ steps.release.outputs.paths_released }}
+      run: |
+        echo "Released paths: $PATHS_RELEASED"
+        echo "$PATHS_RELEASED" | jq -r '.[]' | while read -r pkg_path; do
+          echo "::group::npm publish $pkg_path"
+          (cd "$pkg_path" && npm publish)
+          echo "::endgroup::"
+        done

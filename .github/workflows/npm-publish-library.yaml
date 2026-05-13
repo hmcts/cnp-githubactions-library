@@ -1,4 +1,4 @@
-name: npm changesets release
+name: npm publish library
 
 on:
   workflow_call:
@@ -18,21 +18,21 @@ on:
         required: false
         type: string
         default: 'yarn install --immutable'
-      version-command:
-        description: 'Command for the version step (apply pending changesets, refresh lockfile)'
+      build-command:
+        description: 'Command to build packages before publishing. Set to ":" to skip.'
         required: false
         type: string
-        default: 'yarn changeset version'
-      publish-command:
-        description: 'Command for the publish step (build + publish)'
+        default: 'yarn build'
+      release-please-config-file:
+        description: 'Path to the release-please config file.'
         required: false
         type: string
-        default: 'yarn changeset publish'
-      commit-message:
-        description: 'Commit message and PR title for the Version Packages PR'
+        default: 'release-please-config.json'
+      release-please-manifest-file:
+        description: 'Path to the release-please manifest file.'
         required: false
         type: string
-        default: 'chore: version packages'
+        default: '.release-please-manifest.json'
       working-directory:
         description: 'Working directory'
         required: false
@@ -61,41 +61,36 @@ on:
         description: 'PAT for the HMCTS Azure Artifacts feed with Packaging (Read & Write) on hmcts-lib. Same org-level secret HMCTS Gradle publishes use. Optional at workflow_call validation time so `secrets: inherit` works on repos without the secret yet; publish will fail at runtime if a real publish is attempted without it.'
         required: false
     outputs:
-      published:
-        description: 'Whether packages were published in this run ("true" or "false")'
-        value: ${{ jobs.release.outputs.published }}
-      publishedPackages:
-        description: 'JSON array of published packages (name, version)'
-        value: ${{ jobs.release.outputs.publishedPackages }}
-      hasChangesets:
-        description: 'Whether pending changesets exist on the current ref ("true" or "false")'
-        value: ${{ jobs.release.outputs.hasChangesets }}
+      releases_created:
+        description: 'Whether any releases were created in this run.'
+        value: ${{ jobs.release.outputs.releases_created }}
+      paths_released:
+        description: 'JSON array of paths whose packages were released.'
+        value: ${{ jobs.release.outputs.paths_released }}
 
 jobs:
   release:
     runs-on: ${{ inputs.runner }}
     permissions:
-      contents: write          # tag + commit the Version Packages PR
-      pull-requests: write     # open/update the Version Packages PR
+      contents: write          # tag + commit the release PR
+      pull-requests: write     # open/update the release PR
     outputs:
-      published: ${{ steps.release.outputs.published }}
-      publishedPackages: ${{ steps.release.outputs.publishedPackages }}
-      hasChangesets: ${{ steps.release.outputs.hasChangesets }}
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      paths_released: ${{ steps.release.outputs.paths_released }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - id: release
-        uses: hmcts/cnp-githubactions-library/npm-changesets-release@main
+        uses: hmcts/cnp-githubactions-library/npm-publish-library@main
         with:
           node-version: ${{ inputs.node-version }}
           node-version-file: ${{ inputs.node-version-file }}
           install-command: ${{ inputs.install-command }}
-          version-command: ${{ inputs.version-command }}
-          publish-command: ${{ inputs.publish-command }}
-          commit-message: ${{ inputs.commit-message }}
-          working-directory: ${{ inputs.working-directory }}
+          build-command: ${{ inputs.build-command }}
+          release-please-config-file: ${{ inputs.release-please-config-file }}
+          release-please-manifest-file: ${{ inputs.release-please-manifest-file }}
           azure-artifact-username: ${{ secrets.AZURE_DEVOPS_ARTIFACT_USERNAME }}
           azure-artifact-token: ${{ secrets.AZURE_DEVOPS_ARTIFACT_TOKEN }}
           azure-artifact-feed-url: ${{ inputs.azure-artifact-feed-url }}
