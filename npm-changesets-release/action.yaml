@@ -1,5 +1,5 @@
 name: 'npm changesets release'
-description: 'Run changesets to open a Version Packages PR or publish packages to npm.'
+description: 'Run changesets to open a Version Packages PR or publish packages to the HMCTS Azure Artifacts npm feed.'
 author: 'HMCTS'
 
 inputs:
@@ -31,9 +31,18 @@ inputs:
     description: 'Commit message and PR title for the Version Packages PR'
     required: false
     default: 'chore: version packages'
-  npm-token:
-    description: 'npm token with publish rights for the target scope/packages'
-    required: true
+  azure-artifact-username:
+    description: 'Username for the HMCTS Azure Artifacts feed. Optional so a calling reusable workflow can use `secrets: inherit` even when the secret is not yet configured; npm publish will fail at runtime if a real publish is attempted without it. Defaults to "github" when empty.'
+    required: false
+    default: ''
+  azure-artifact-token:
+    description: 'PAT for the HMCTS Azure Artifacts feed with Packaging (Read & Write) on hmcts-lib. Same secret HMCTS Gradle publish workflows consume. Optional so a calling reusable workflow can use `secrets: inherit` even when the secret is not yet configured; npm publish will fail at runtime if a real publish is attempted without it.'
+    required: false
+    default: ''
+  azure-artifact-feed-url:
+    description: 'Azure Artifacts npm feed URL. Defaults to the shared HMCTS hmcts-lib feed.'
+    required: false
+    default: 'https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/'
   working-directory:
     description: 'Working directory'
     required: false
@@ -63,8 +72,27 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
         node-version-file: ${{ inputs.node-version-file }}
-        registry-url: 'https://registry.npmjs.org'
         cache: 'yarn'
+
+    - name: Configure npm authentication for Azure Artifacts
+      shell: bash
+      env:
+        AZURE_DEVOPS_ARTIFACT_USERNAME: ${{ inputs.azure-artifact-username }}
+        AZURE_DEVOPS_ARTIFACT_TOKEN: ${{ inputs.azure-artifact-token }}
+        FEED_URL: ${{ inputs.azure-artifact-feed-url }}
+      run: |
+        token_b64="$(printf %s "$AZURE_DEVOPS_ARTIFACT_TOKEN" | base64 | tr -d '\n')"
+        username="${AZURE_DEVOPS_ARTIFACT_USERNAME:-github}"
+        feed="${FEED_URL%/}/"
+        # Strip the scheme to build the npm-style "//host/path/" auth keys.
+        feed_no_scheme="${feed#https:}"
+        cat > "$HOME/.npmrc" <<EOF
+        registry=${feed}
+        always-auth=true
+        ${feed_no_scheme}:username=${username}
+        ${feed_no_scheme}:_password=${token_b64}
+        ${feed_no_scheme}:email=github-actions@hmcts.net
+        EOF
 
     - name: Install dependencies
       shell: bash
@@ -82,5 +110,3 @@ runs:
         title: ${{ inputs.commit-message }}
       env:
         GITHUB_TOKEN: ${{ github.token }}
-        NPM_TOKEN: ${{ inputs.npm-token }}
-        NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
