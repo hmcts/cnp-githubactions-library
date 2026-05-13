@@ -151,16 +151,17 @@ permissions:
 
 ## Installing published packages
 
-Downstream consumers add a `.npmrc` that scope-routes to the feed and authenticates with a personal PAT (or the same automation PAT in CI):
+Downstream consumers add the following to their `.yarnrc.yml` so Yarn routes the `@hmcts-cft` scope to the Azure Artifacts feed and authenticates with a fresh Azure AD access token from the local `az` CLI session:
 
-```ini
-@hmcts-cft:registry=https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/
-//pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/:username=hmcts
-//pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/:_password=${AZURE_DEVOPS_ARTIFACT_TOKEN_BASE64}
-//pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/:email=npm@hmcts.net
+```yaml
+npmScopes:
+  hmcts-cft:
+    npmRegistryServer: "https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/"
+    npmAlwaysAuth: true
+    npmAuthToken: "exec:az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv"
 ```
 
-`AZURE_DEVOPS_ARTIFACT_TOKEN_BASE64` is the base64 encoding of the PAT (`printf %s "$PAT" | base64`).
+Then run `az login` once before `yarn install`. The `exec:` form re-runs `az` per request so the token is always fresh — no long-lived PAT to rotate, no `.npmrc` to leak. The GUID `499b84ac-1321-427f-aa17-267ca6975798` is the Azure DevOps resource ID.
 
 ## When to use this action vs the reusable workflow
 
