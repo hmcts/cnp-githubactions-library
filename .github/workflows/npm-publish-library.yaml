@@ -83,7 +83,7 @@ jobs:
           fetch-depth: 0
 
       - id: release
-        uses: hmcts/cnp-githubactions-library/npm-publish-library@feat/release-please
+        uses: hmcts/cnp-githubactions-library/npm-publish-library@main
         with:
           node-version: ${{ inputs.node-version }}
           node-version-file: ${{ inputs.node-version-file }}
