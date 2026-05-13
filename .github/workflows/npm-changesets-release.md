@@ -1,21 +1,22 @@
 # npm Changesets Release Workflow
 
-Publish packages to npm from a monorepo using [changesets](https://github.com/changesets/changesets). On every push to the release branch the workflow either:
+Publish packages to the HMCTS Azure Artifacts npm feed from a monorepo using [changesets](https://github.com/changesets/changesets). On every push to the release branch the workflow either:
 
 - **upserts a "Version Packages" pull request** that consumes pending `.changeset/*.md` files (bumps versions, writes CHANGELOGs), or
-- **publishes to npm + creates GitHub releases** when the Version Packages PR has been merged and `package.json` versions are ahead of the registry.
+- **publishes to Azure Artifacts + creates GitHub releases** when the Version Packages PR has been merged and `package.json` versions are ahead of the feed.
 
 The mode is chosen automatically by `changesets/action@v1` based on the state of `.changeset/`.
 
 **Workflow file:** `.github/workflows/npm-changesets-release.yaml`
+
+> Publishes target the shared HMCTS `hmcts-lib` Azure Artifacts feed (the same feed Gradle artifacts publish to). Use a CFT-allocated npm scope such as `@hmcts-cft/<name>` rather than the public `@hmcts` scope on npmjs.org.
 
 > **💡 Need more flexibility?** This reusable workflow is great when you want a stand-alone release job. If you need to interleave other steps (e.g. run tests, post Slack notifications) in the same job, use the [composite action](../../npm-changesets-release/README.md) instead.
 
 ## Features
 
 - Single workflow handles both version-bumping and publishing
-- `secrets: inherit` plumbs the org-level `NPM_TOKEN` automatically — no per-repo wiring of the token name
-- One place to swap the npm auth mechanism (token → OIDC) when the org migrates
+- `secrets: inherit` plumbs the org-level `AZURE_DEVOPS_ARTIFACT_USERNAME` / `AZURE_DEVOPS_ARTIFACT_TOKEN` pair automatically — same secrets HMCTS Gradle publishes use
 - Configurable install / version / publish commands (yarn, npm, pnpm)
 - Returns `published` / `publishedPackages` / `hasChangesets` outputs
 
@@ -25,7 +26,7 @@ The mode is chosen automatically by `changesets/action@v1` based on the state of
 
 - You want "publish on push to master" with minimal boilerplate
 - The release lives in its own job — no other tasks need to run alongside it
-- Your org provides `NPM_TOKEN` as an org-level secret and you can use `secrets: inherit`
+- Your org provides `AZURE_DEVOPS_ARTIFACT_USERNAME` / `AZURE_DEVOPS_ARTIFACT_TOKEN` at the org level and you can use `secrets: inherit`
 
 **Use the [composite action](../../npm-changesets-release/README.md) when:**
 
@@ -34,7 +35,7 @@ The mode is chosen automatically by `changesets/action@v1` based on the state of
 
 ## Example Usage
 
-### Default — Yarn 4 monorepo, org-level secret
+### Default — Yarn 4 monorepo, org-level secrets
 
 ```yaml
 name: Release
@@ -57,7 +58,7 @@ That's it. The workflow assumes:
 
 - A `.nvmrc` file at the repo root (otherwise pass `node-version`).
 - Root scripts named `changeset version` and `changeset publish` (the changesets defaults).
-- `NPM_TOKEN` available at the org or repo level.
+- `AZURE_DEVOPS_ARTIFACT_USERNAME` and `AZURE_DEVOPS_ARTIFACT_TOKEN` available at the org or repo level (they are at the HMCTS org level — Gradle publishes use them).
 
 ### Custom commands — build before publish
 
@@ -84,7 +85,7 @@ jobs:
     secrets: inherit
 ```
 
-### Explicit secret name (not using `inherit`)
+### Explicit secret names (not using `inherit`)
 
 ```yaml
 jobs:
@@ -93,7 +94,8 @@ jobs:
     with:
       node-version-file: '.nvmrc'
     secrets:
-      NPM_TOKEN: ${{ secrets.MY_REPO_NPM_TOKEN }}
+      AZURE_DEVOPS_ARTIFACT_USERNAME: ${{ secrets.MY_FEED_USERNAME }}
+      AZURE_DEVOPS_ARTIFACT_TOKEN: ${{ secrets.MY_FEED_TOKEN }}
 ```
 
 ### Reading outputs in a downstream job
@@ -125,12 +127,16 @@ jobs:
 | `commit-message` | Commit message and PR title for the Version Packages PR | No | `chore: version packages` |
 | `working-directory` | Working directory | No | `.` |
 | `runner` | GitHub runner to use | No | `ubuntu-latest` |
+| `azure-artifact-feed-url` | Azure Artifacts npm feed URL | No | `https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/` |
 
 ## Secrets
 
 | Secret | Description | Required |
 |--------|-------------|----------|
-| `NPM_TOKEN` | npm automation token with publish rights for the target scope/packages | **Yes** |
+| `AZURE_DEVOPS_ARTIFACT_USERNAME` | Username for the HMCTS Azure Artifacts feed | No (but publish will fail at runtime without it) |
+| `AZURE_DEVOPS_ARTIFACT_TOKEN` | PAT with Packaging (Read & Write) on `hmcts-lib` | No (but publish will fail at runtime without it) |
+
+Both secrets are declared optional at the `workflow_call` boundary so callers using `secrets: inherit` don't fail validation on repos that haven't configured them yet. The downstream `npm publish` will exit with an authentication error if a real publish is attempted without valid credentials, so missing-secret failures still surface — just at publish time rather than workflow-load time.
 
 ## Outputs
 
@@ -142,9 +148,14 @@ jobs:
 
 ## Required repo / org setup
 
-1. **`NPM_TOKEN` secret** at the GitHub org level (`hmcts`), so any repo can use `secrets: inherit`. Granular automation token, scoped to the target npm scope or packages.
+1. **`AZURE_DEVOPS_ARTIFACT_USERNAME` and `AZURE_DEVOPS_ARTIFACT_TOKEN` secrets** at the GitHub org level (`hmcts`), so any repo can use `secrets: inherit`. The PAT needs `Packaging (Read & Write)` on the `hmcts-lib` feed (these are the same secrets HMCTS Gradle publishes use).
 2. **Allow Actions to open PRs** — org/repo Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests". The bot needs this to open the Version Packages PR.
-3. **Per-package publishability** — every publishable `package.json` needs `name`, `version`, `files`, `exports`/`main`, and for scoped public packages `publishConfig.access: public`. For provenance attestation (recommended), also add `publishConfig.provenance: true`.
+3. **Per-package publishability** — every publishable `package.json` needs `name`, `version`, `files`, `exports`/`main`, and `publishConfig.registry` pointing at the Azure feed (so a stray `npm publish` from a dev machine doesn't go to npmjs):
+   ```json
+   "publishConfig": {
+     "registry": "https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/"
+   }
+   ```
 
 ## Contributor flow (consumer's side)
 
@@ -156,8 +167,21 @@ Once this workflow is wired into a consumer repo:
 4. On merge to master, this workflow upserts a "Version Packages" PR.
 5. Merging that PR triggers publish + GitHub release.
 
+## Installing the published packages
+
+Downstream consumers add a `.npmrc` that scope-routes to the feed and authenticates with a PAT:
+
+```ini
+@hmcts-cft:registry=https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/
+//pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/:username=hmcts
+//pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/:_password=${AZURE_DEVOPS_ARTIFACT_TOKEN_BASE64}
+//pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/:email=npm@hmcts.net
+```
+
+`AZURE_DEVOPS_ARTIFACT_TOKEN_BASE64` is the base64 encoding of the PAT (`printf %s "$PAT" | base64`).
+
 ## Notes
 
 - The workflow runs `corepack enable` so Yarn 4 berry works out of the box.
-- The `id-token: write` permission is granted so `npm publish --provenance` works when `publishConfig.provenance: true` is set on the package.
+- npm provenance attestation is npmjs.org-only and is not supported by Azure Artifacts; no `id-token: write` permission is needed.
 - If the consumer monorepo uses npm or pnpm, override `install-command` / `version-command` / `publish-command` accordingly (e.g. `pnpm install --frozen-lockfile`, `pnpm changeset publish`).

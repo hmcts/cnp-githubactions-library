@@ -43,10 +43,18 @@ on:
         required: false
         type: string
         default: 'ubuntu-latest'
+      azure-artifact-feed-url:
+        description: 'Azure Artifacts npm feed URL. Defaults to the shared HMCTS hmcts-lib feed.'
+        required: false
+        type: string
+        default: 'https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/'
     secrets:
-      NPM_TOKEN:
-        description: 'npm automation token with publish rights for the target scope/packages'
-        required: true
+      AZURE_DEVOPS_ARTIFACT_USERNAME:
+        description: 'Username for the HMCTS Azure Artifacts feed. Same org-level secret HMCTS Gradle publishes use. Optional at workflow_call validation time so `secrets: inherit` works on repos without the secret yet; publish will fail at runtime if a real publish is attempted without it.'
+        required: false
+      AZURE_DEVOPS_ARTIFACT_TOKEN:
+        description: 'PAT for the HMCTS Azure Artifacts feed with Packaging (Read & Write) on hmcts-lib. Same org-level secret HMCTS Gradle publishes use. Optional at workflow_call validation time so `secrets: inherit` works on repos without the secret yet; publish will fail at runtime if a real publish is attempted without it.'
+        required: false
     outputs:
       published:
         description: 'Whether packages were published in this run ("true" or "false")'
@@ -64,7 +72,6 @@ jobs:
     permissions:
       contents: write          # tag + commit the Version Packages PR
       pull-requests: write     # open/update the Version Packages PR
-      id-token: write          # npm provenance attestation
     outputs:
       published: ${{ steps.release.outputs.published }}
       publishedPackages: ${{ steps.release.outputs.publishedPackages }}
@@ -84,4 +91,6 @@ jobs:
           publish-command: ${{ inputs.publish-command }}
           commit-message: ${{ inputs.commit-message }}
           working-directory: ${{ inputs.working-directory }}
-          npm-token: ${{ secrets.NPM_TOKEN }}
+          azure-artifact-username: ${{ secrets.AZURE_DEVOPS_ARTIFACT_USERNAME }}
+          azure-artifact-token: ${{ secrets.AZURE_DEVOPS_ARTIFACT_TOKEN }}
+          azure-artifact-feed-url: ${{ inputs.azure-artifact-feed-url }}

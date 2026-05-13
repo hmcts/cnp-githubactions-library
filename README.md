@@ -160,7 +160,7 @@ jobs:
 
 ### npm Changesets Release
 
-Publish JavaScript packages to npm from a monorepo using [changesets](https://github.com/changesets/changesets). On every push to the release branch the workflow either upserts a "Version Packages" pull request (when pending `.changeset/*.md` files exist) or publishes to npm + creates GitHub releases (when versions are ahead of the registry).
+Publish JavaScript packages to the HMCTS Azure Artifacts npm feed (`hmcts-lib`) from a monorepo using [changesets](https://github.com/changesets/changesets). On every push to the release branch the workflow either upserts a "Version Packages" pull request (when pending `.changeset/*.md` files exist) or publishes to Azure Artifacts + creates GitHub releases (when versions are ahead of the feed). Uses the existing `AZURE_DEVOPS_ARTIFACT_USERNAME` / `AZURE_DEVOPS_ARTIFACT_TOKEN` org-level secrets (same pair HMCTS Gradle publishes use).
 
 **Available in Two Formats:**
 
@@ -186,7 +186,6 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -196,12 +195,13 @@ jobs:
 
       - uses: hmcts/cnp-githubactions-library/npm-changesets-release@main
         with:
-          npm-token: ${{ secrets.NPM_TOKEN }}
+          azure-artifact-username: ${{ secrets.AZURE_DEVOPS_ARTIFACT_USERNAME }}
+          azure-artifact-token: ${{ secrets.AZURE_DEVOPS_ARTIFACT_TOKEN }}
 ```
 
 **Features:**
 - Single workflow handles both version-bumping and publishing
-- Centralised `NPM_TOKEN` plumbing — one place to swap secret names or move to OIDC
+- Reuses the org-level Azure Artifacts secrets (no separate npm token to manage)
 - Configurable install / version / publish commands (yarn, npm, pnpm)
 - Yarn 4 + Corepack-friendly defaults
 - Outputs `published` / `publishedPackages` / `hasChangesets` for downstream steps
