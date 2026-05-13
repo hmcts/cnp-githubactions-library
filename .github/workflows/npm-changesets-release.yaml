@@ -48,6 +48,11 @@ on:
         required: false
         type: string
         default: 'https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/'
+      npm-scope:
+        description: 'Optional npm scope (e.g. "@hmcts-cft"). When set, writes "<scope>:registry=<feed>" into the runtime .npmrc so scoped packages route to the Azure feed even if their package.json is missing publishConfig.registry.'
+        required: false
+        type: string
+        default: ''
     secrets:
       AZURE_DEVOPS_ARTIFACT_USERNAME:
         description: 'Username for the HMCTS Azure Artifacts feed. Same org-level secret HMCTS Gradle publishes use. Optional at workflow_call validation time so `secrets: inherit` works on repos without the secret yet; publish will fail at runtime if a real publish is attempted without it.'
@@ -94,3 +99,4 @@ jobs:
           azure-artifact-username: ${{ secrets.AZURE_DEVOPS_ARTIFACT_USERNAME }}
           azure-artifact-token: ${{ secrets.AZURE_DEVOPS_ARTIFACT_TOKEN }}
           azure-artifact-feed-url: ${{ inputs.azure-artifact-feed-url }}
+          npm-scope: ${{ inputs.npm-scope }}

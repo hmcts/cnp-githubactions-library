@@ -43,6 +43,10 @@ inputs:
     description: 'Azure Artifacts npm feed URL. Defaults to the shared HMCTS hmcts-lib feed.'
     required: false
     default: 'https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/'
+  npm-scope:
+    description: 'Optional npm scope (e.g. "@hmcts-cft"). When set, writes "<scope>:registry=<feed>" into the runtime .npmrc so scoped packages route to the Azure feed even if their package.json is missing publishConfig.registry.'
+    required: false
+    default: ''
   working-directory:
     description: 'Working directory'
     required: false
@@ -80,6 +84,7 @@ runs:
         AZURE_DEVOPS_ARTIFACT_USERNAME: ${{ inputs.azure-artifact-username }}
         AZURE_DEVOPS_ARTIFACT_TOKEN: ${{ inputs.azure-artifact-token }}
         FEED_URL: ${{ inputs.azure-artifact-feed-url }}
+        NPM_SCOPE: ${{ inputs.npm-scope }}
       run: |
         token_b64="$(printf %s "$AZURE_DEVOPS_ARTIFACT_TOKEN" | base64 | tr -d '\n')"
         username="${AZURE_DEVOPS_ARTIFACT_USERNAME:-github}"
@@ -93,6 +98,13 @@ runs:
         ${feed_no_scheme}:_password=${token_b64}
         ${feed_no_scheme}:email=github-actions@hmcts.net
         EOF
+        if [ -n "$NPM_SCOPE" ]; then
+          # Defend against scoped packages whose package.json is missing
+          # publishConfig.registry — npm picks @<scope>:registry over the
+          # default `registry=` line.
+          scope="${NPM_SCOPE#@}"
+          echo "@${scope}:registry=${feed}" >> "$HOME/.npmrc"
+        fi
 
     - name: Install dependencies
       shell: bash

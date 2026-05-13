@@ -128,6 +128,7 @@ jobs:
 | `working-directory` | Working directory | No | `.` |
 | `runner` | GitHub runner to use | No | `ubuntu-latest` |
 | `azure-artifact-feed-url` | Azure Artifacts npm feed URL | No | `https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/` |
+| `npm-scope` | Optional npm scope (e.g. `@hmcts-cft`). When set, writes `<scope>:registry=<feed>` into the runtime `.npmrc` so scoped packages route to the Azure feed even if their `package.json` is missing `publishConfig.registry`. Recommended. | No | (empty) |
 
 ## Secrets
 
@@ -150,7 +151,7 @@ Both secrets are declared optional at the `workflow_call` boundary so callers us
 
 1. **`AZURE_DEVOPS_ARTIFACT_USERNAME` and `AZURE_DEVOPS_ARTIFACT_TOKEN` secrets** at the GitHub org level (`hmcts`), so any repo can use `secrets: inherit`. The PAT needs `Packaging (Read & Write)` on the `hmcts-lib` feed (these are the same secrets HMCTS Gradle publishes use).
 2. **Allow Actions to open PRs** — org/repo Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests". The bot needs this to open the Version Packages PR.
-3. **Per-package publishability** — every publishable `package.json` needs `name`, `version`, `files`, `exports`/`main`, and `publishConfig.registry` pointing at the Azure feed (so a stray `npm publish` from a dev machine doesn't go to npmjs):
+3. **Per-package publishability** — every publishable `package.json` needs `name`, `version`, `files`, and `exports`/`main`. We strongly recommend setting `publishConfig.registry` on each package (so a stray `npm publish` from a developer machine doesn't go to npmjs), but passing `npm-scope` to the workflow also guarantees scoped packages route to the Azure feed at CI time:
    ```json
    "publishConfig": {
      "registry": "https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/"
