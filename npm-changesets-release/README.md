@@ -112,6 +112,7 @@ jobs:
 | `azure-artifact-username` | Username for the HMCTS Azure Artifacts feed. Optional so the parent reusable workflow can use `secrets: inherit`; if empty, npm publish will fail at runtime. Defaults to `github` when empty. | No | (empty) |
 | `azure-artifact-token` | PAT for the HMCTS Azure Artifacts feed with Packaging (Read & Write) on `hmcts-lib`. Optional so the parent reusable workflow can use `secrets: inherit`; if empty, npm publish will fail at runtime. | No | (empty) |
 | `azure-artifact-feed-url` | Azure Artifacts npm feed URL | No | `https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/` |
+| `npm-scope` | Optional npm scope (e.g. `@hmcts-cft`). When set, writes `<scope>:registry=<feed>` into the runtime `.npmrc` so scoped packages route to the Azure feed even if their `package.json` is missing `publishConfig.registry`. Recommended. | No | (empty) |
 | `node-version` | Node.js version (overridden by `node-version-file` if both set) | No | (empty) |
 | `node-version-file` | Path to a Node version file | No | `.nvmrc` |
 | `setup-node` | Whether to run `actions/setup-node`. Set `false` if Node is already configured. | No | `true` |
@@ -141,7 +142,7 @@ permissions:
 
 1. **`AZURE_DEVOPS_ARTIFACT_USERNAME` and `AZURE_DEVOPS_ARTIFACT_TOKEN` secrets** — the same org-level pair HMCTS Gradle publishes consume. The PAT needs `Packaging (Read & Write)` on the `hmcts-lib` feed.
 2. **Allow Actions to open PRs** — repo or org Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests".
-3. **Per-package publishability** — each publishable `package.json` needs `name`, `version`, `files`, `exports`/`main`, and `publishConfig.registry` pointing at the Azure feed (so a stray `npm publish` from a developer machine doesn't go to npmjs):
+3. **Per-package publishability** — each publishable `package.json` needs `name`, `version`, `files`, and `exports`/`main`. We strongly recommend setting `publishConfig.registry` on each package (so a stray `npm publish` from a developer machine doesn't go to npmjs), but passing `npm-scope` to the action also guarantees scoped packages route to the Azure feed at CI time:
    ```json
    "publishConfig": {
      "registry": "https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/npm/registry/"
