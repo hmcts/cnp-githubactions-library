@@ -158,26 +158,28 @@ jobs:
 | Integration with other actions | ❌ | ✅ |
 | Matrix strategy deployments | ❌ | ✅ |
 
-### npm Changesets Release
+### npm Publish Library
 
-Publish JavaScript packages to the HMCTS Azure Artifacts npm feed (`hmcts-lib`) from a monorepo using [changesets](https://github.com/changesets/changesets). On every push to the release branch the workflow either upserts a "Version Packages" pull request (when pending `.changeset/*.md` files exist) or publishes to Azure Artifacts + creates GitHub releases (when versions are ahead of the feed). Uses the existing `AZURE_DEVOPS_ARTIFACT_USERNAME` / `AZURE_DEVOPS_ARTIFACT_TOKEN` org-level secrets (same pair HMCTS Gradle publishes use).
+Publish JavaScript packages to the HMCTS Azure Artifacts npm feed (`hmcts-lib`) from a monorepo using [release-please](https://github.com/googleapis/release-please). On every push to the release branch the workflow either upserts a release pull request (when unreleased Conventional Commits exist) or publishes to Azure Artifacts + creates GitHub releases (when the release PR has been merged). Uses the existing `AZURE_DEVOPS_ARTIFACT_USERNAME` / `AZURE_DEVOPS_ARTIFACT_TOKEN` org-level secrets (same pair HMCTS Gradle publishes use).
 
 **Available in Two Formats:**
 
 #### 1. Reusable Workflow (Simple, Standardised)
 
-📖 **[View workflow documentation](.github/workflows/npm-changesets-release.md)**
+📖 **[View workflow documentation](.github/workflows/npm-publish-library.md)**
 
 ```yaml
 jobs:
   release:
-    uses: hmcts/cnp-githubactions-library/.github/workflows/npm-changesets-release.yaml@main
+    uses: hmcts/cnp-githubactions-library/.github/workflows/npm-publish-library.yaml@main
+    with:
+      npm-scope: '@hmcts-cft'
     secrets: inherit
 ```
 
 #### 2. Composite Action (Flexible, Extensible)
 
-📖 **[View action documentation](npm-changesets-release/README.md)**
+📖 **[View action documentation](npm-publish-library/README.md)**
 
 ```yaml
 jobs:
@@ -191,20 +193,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - run: yarn test                # run tests before publishing
-
-      - uses: hmcts/cnp-githubactions-library/npm-changesets-release@main
+      - uses: hmcts/cnp-githubactions-library/npm-publish-library@main
         with:
           azure-artifact-username: ${{ secrets.AZURE_DEVOPS_ARTIFACT_USERNAME }}
           azure-artifact-token: ${{ secrets.AZURE_DEVOPS_ARTIFACT_TOKEN }}
+          npm-scope: '@hmcts-cft'
 ```
 
 **Features:**
-- Single workflow handles both version-bumping and publishing
+- Single workflow handles version-bumping, publishing, tagging, and GitHub release creation
+- Driven by Conventional Commits — no separate changeset step for contributors
 - Reuses the org-level Azure Artifacts secrets (no separate npm token to manage)
-- Configurable install / version / publish commands (yarn, npm, pnpm)
+- Configurable install / build commands (yarn, npm, pnpm)
 - Yarn 4 + Corepack-friendly defaults
-- Outputs `published` / `publishedPackages` / `hasChangesets` for downstream steps
+- Outputs `releases_created` / `paths_released` for downstream steps
 
 ## 📖 Usage
 
