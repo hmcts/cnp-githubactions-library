@@ -117,25 +117,38 @@ runs:
         fi
 
         if [ -z "$NEXT_VERSION" ]; then
-          CURRENT_VERSION="${LATEST_TAG#"${TAG_PREFIX}"}"
-
-          # Strip optional pre-release / build-metadata suffix to obtain core MAJOR.MINOR.PATCH
-          CORE_VERSION=$(echo "$CURRENT_VERSION" | cut -d'-' -f1 | cut -d'+' -f1)
-
-          if [[ ! "$CORE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Latest tag '${LATEST_TAG}' does not contain a valid MAJOR.MINOR.PATCH version."
-            exit 1
+          # Idempotency guard: if a draft already exists for LATEST_TAG, return it without bumping.
+          # This ensures that re-running the action on the same commit returns the same version.
+          if [ -n "$LATEST_TAG" ]; then
+            DRAFT_EXISTS=$(gh release view "$LATEST_TAG" --json isDraft --jq 'select(.isDraft == true) | "yes"' 2>/dev/null || true)
+            if [ "$DRAFT_EXISTS" = "yes" ]; then
+              echo "Draft release already exists for ${LATEST_TAG} — returning without version bump (idempotent)."
+              NEXT_VERSION="${LATEST_TAG#"${TAG_PREFIX}"}"
+            fi
           fi
 
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CORE_VERSION"
+          # Only bump if no idempotent draft was found
+          if [ -z "$NEXT_VERSION" ]; then
+            CURRENT_VERSION="${LATEST_TAG#"${TAG_PREFIX}"}"
 
-          case "$BUMP_TYPE" in
-            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-            patch)  PATCH=$((PATCH + 1)) ;;
-          esac
+            # Strip optional pre-release / build-metadata suffix to obtain core MAJOR.MINOR.PATCH
+            CORE_VERSION=$(echo "$CURRENT_VERSION" | cut -d'-' -f1 | cut -d'+' -f1)
 
-          NEXT_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            if [[ ! "$CORE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Latest tag '${LATEST_TAG}' does not contain a valid MAJOR.MINOR.PATCH version."
+              exit 1
+            fi
+
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CORE_VERSION"
+
+            case "$BUMP_TYPE" in
+              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+              patch)  PATCH=$((PATCH + 1)) ;;
+            esac
+
+            NEXT_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          fi
         fi
 
         NEXT_TAG="${TAG_PREFIX}${NEXT_VERSION}"
