@@ -52,6 +52,27 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Validate inputs and checkout state
+      shell: bash
+      env:
+        TAG_PREFIX: ${{ inputs.tag-prefix }}
+        BUMP_TYPE:  ${{ inputs.bump-type }}
+      run: |
+        # Validate tag-prefix — only allow characters that are safe in both shell globs and git
+        # tag patterns. Regex metacharacters (e.g. [ ] * ?) would silently corrupt the tag search.
+        if [[ ! "$TAG_PREFIX" =~ ^[a-zA-Z0-9_./-]*$ ]]; then
+          echo "::error::tag-prefix '${TAG_PREFIX}' contains invalid characters. Only alphanumeric characters and the following are allowed: - . _ /"
+          exit 1
+        fi
+
+        # Detect shallow clone — a shallow checkout hides tags and will cause every run to
+        # bootstrap to initial-version instead of incrementing. Fail early with a clear message.
+        IS_SHALLOW=$(git rev-parse --is-shallow-repository 2>/dev/null || echo "false")
+        if [ "$IS_SHALLOW" = "true" ]; then
+          echo "::error::The repository was checked out as a shallow clone. This action requires full tag history to calculate the next version. Add 'fetch-depth: 0' to your actions/checkout step."
+          exit 1
+        fi
+
     - name: Calculate next version
       id: next-version
       shell: bash
