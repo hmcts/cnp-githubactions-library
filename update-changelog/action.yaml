@@ -101,6 +101,16 @@ runs:
         CHANGELOG:      ${{ inputs.changelog-path }}
         NOTES_FILE:     ${{ steps.notes.outputs.notes-file }}
       run: |
+        # Idempotency guard — if a section for this version already exists, skip modification.
+        # This prevents duplicate entries on reruns within the same day or after a failed push.
+        if [ -f "$CHANGELOG" ] && grep -qF "## [${VERSION}]" "$CHANGELOG"; then
+          echo "Changelog already contains a section for ${VERSION} — skipping update."
+          rm -f "$NOTES_FILE"
+          echo "changelog-path=${CHANGELOG}" >> "$GITHUB_OUTPUT"
+          echo "already-exists=true"         >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
         DATE=$(date -u +%Y-%m-%d)
         NOTES=$(cat "$NOTES_FILE")
 
@@ -149,19 +159,26 @@ HEADER
         VERSION:        ${{ inputs.version }}
         CHANGELOG:      ${{ inputs.changelog-path }}
         COMMIT_MSG_TPL: ${{ inputs.commit-message }}
+        ALREADY_EXISTS: ${{ steps.update.outputs.already-exists }}
       run: |
-        git add "$CHANGELOG"
-
-        if git diff --cached --quiet; then
-          echo "No changes to commit — changelog already up to date."
+        if [ "$ALREADY_EXISTS" = "true" ]; then
+          echo "Changelog section already existed — no commit needed."
           echo "committed=false" >> "$GITHUB_OUTPUT"
         else
-          # Substitute {version} placeholder and append [skip ci] to prevent loop
-          COMMIT_MSG="${COMMIT_MSG_TPL//\{version\}/${VERSION}} [skip ci]"
-          git commit -m "$COMMIT_MSG"
-          git push
-          echo "committed=true" >> "$GITHUB_OUTPUT"
-          echo "Pushed changelog commit: ${COMMIT_MSG}"
+          git add "$CHANGELOG"
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit — changelog already up to date."
+            echo "committed=false" >> "$GITHUB_OUTPUT"
+          else
+            # Substitute {version} placeholder and append [skip ci] to prevent recursive runs
+            COMMIT_MSG="${COMMIT_MSG_TPL//\{version\}/${VERSION}} [skip ci]"
+            git commit -m "$COMMIT_MSG"
+            # Explicit ref avoids fragility with detached HEAD or custom checkout refs
+            git push origin HEAD
+            echo "committed=true" >> "$GITHUB_OUTPUT"
+            echo "Pushed changelog commit: ${COMMIT_MSG}"
+          fi
         fi
 
         {

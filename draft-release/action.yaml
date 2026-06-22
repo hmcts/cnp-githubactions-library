@@ -56,20 +56,46 @@ runs:
       id: next-version
       shell: bash
       env:
+        GH_TOKEN: ${{ inputs.github-token }}
         TAG_PREFIX: ${{ inputs.tag-prefix }}
         BUMP_TYPE: ${{ inputs.bump-type }}
         INITIAL_VERSION: ${{ inputs.initial-version }}
       run: |
+        # Validate bump-type early — fail explicitly rather than silently falling through to patch
+        case "$BUMP_TYPE" in
+          major|minor|patch) ;;
+          *)
+            echo "::error::Invalid bump-type '${BUMP_TYPE}'. Must be one of: patch, minor, major."
+            exit 1
+            ;;
+        esac
+
         # Fetch all tags so the full history is available
         git fetch --tags --quiet
 
-        # Find the most recent SemVer tag that matches the configured prefix
+        # Find the most recent SemVer git tag that matches the configured prefix
         LATEST_TAG=$(git tag -l "${TAG_PREFIX}[0-9]*.[0-9]*.[0-9]*" | sort -V | tail -n1)
 
         if [ -z "$LATEST_TAG" ]; then
-          echo "No existing tags found — bootstrapping with initial version: ${INITIAL_VERSION}"
-          NEXT_VERSION="${INITIAL_VERSION}"
-        else
+          # No published (git) tags yet — check if any GitHub releases already exist.
+          # Draft releases do not create git tags until published, so without this check
+          # the action would keep generating the same initial-version on every run while
+          # the first draft remains unpublished.
+          echo "No git tags found — checking GitHub releases for an existing version..."
+          RELEASE_VERSION=$(gh release list --limit 50 --json tagName,isDraft \
+            --jq "[.[] | select(.tagName | test(\"^${TAG_PREFIX}[0-9]+\\\\.[0-9]+\\\\.[0-9]+\")) \
+                  | .tagName] | sort | last" 2>/dev/null || true)
+
+          if [ -n "$RELEASE_VERSION" ]; then
+            echo "Found existing release tag in GitHub: ${RELEASE_VERSION} — using it as the base."
+            LATEST_TAG="$RELEASE_VERSION"
+          else
+            echo "No existing releases found — bootstrapping with initial version: ${INITIAL_VERSION}"
+            NEXT_VERSION="${INITIAL_VERSION}"
+          fi
+        fi
+
+        if [ -z "$NEXT_VERSION" ]; then
           CURRENT_VERSION="${LATEST_TAG#"${TAG_PREFIX}"}"
 
           # Strip optional pre-release / build-metadata suffix to obtain core MAJOR.MINOR.PATCH
@@ -85,7 +111,7 @@ runs:
           case "$BUMP_TYPE" in
             major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
             minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-            patch|*) PATCH=$((PATCH + 1)) ;;
+            patch)  PATCH=$((PATCH + 1)) ;;
           esac
 
           NEXT_VERSION="${MAJOR}.${MINOR}.${PATCH}"
@@ -112,19 +138,28 @@ runs:
         INPUT_PRERELEASE: ${{ inputs.prerelease }}
         CUSTOM_NOTES: ${{ inputs.release-notes }}
       run: |
-        FLAGS=()
-        [[ "$INPUT_DRAFT"      == "true" ]] && FLAGS+=(--draft)
-        [[ "$INPUT_PRERELEASE" == "true" ]] && FLAGS+=(--prerelease)
-
         # Write any custom notes to a temp file to avoid shell-injection risks
         NOTES_FILE=$(mktemp)
         trap 'rm -f "$NOTES_FILE"' EXIT
 
+        # Flags shared by both create and edit
+        SHARED_FLAGS=()
+        [[ "$INPUT_DRAFT"      == "true" ]] && SHARED_FLAGS+=(--draft)
+        [[ "$INPUT_PRERELEASE" == "true" ]] && SHARED_FLAGS+=(--prerelease)
+
+        # Flags for CREATE only — --generate-notes is not valid for gh release edit
+        CREATE_FLAGS=("${SHARED_FLAGS[@]}")
+        # Flags for EDIT — notes only updated when custom notes are explicitly supplied;
+        # --generate-notes is intentionally omitted (unsupported by gh release edit)
+        EDIT_FLAGS=("${SHARED_FLAGS[@]}")
+
         if [ -n "$CUSTOM_NOTES" ]; then
           printf '%s' "$CUSTOM_NOTES" > "$NOTES_FILE"
-          FLAGS+=(--notes-file "$NOTES_FILE")
+          CREATE_FLAGS+=(--notes-file "$NOTES_FILE")
+          EDIT_FLAGS+=(--notes-file "$NOTES_FILE")
         else
-          FLAGS+=(--generate-notes)
+          # Auto-generate notes only on create; leave notes unchanged on edit
+          CREATE_FLAGS+=(--generate-notes)
         fi
 
         # If a draft release already exists for this tag, update it rather than create a duplicate
@@ -132,10 +167,10 @@ runs:
 
         if [ "$EXISTING" = "yes" ]; then
           echo "Updating existing draft release for ${TAG}"
-          gh release edit "$TAG" --title "Release ${VERSION}" "${FLAGS[@]}"
+          gh release edit "$TAG" --title "Release ${VERSION}" "${EDIT_FLAGS[@]}"
         else
           echo "Creating new release for ${TAG}"
-          gh release create "$TAG" --title "Release ${VERSION}" "${FLAGS[@]}"
+          gh release create "$TAG" --title "Release ${VERSION}" "${CREATE_FLAGS[@]}"
         fi
 
         RELEASE_URL=$(gh release view "$TAG" --json url        --jq '.url'        2>/dev/null || echo "")

@@ -71,6 +71,11 @@ jobs:
     runs-on: ${{ inputs.runner }}
     permissions:
       contents: write
+    # Prevent concurrent runs from racing on version calculation and tag creation.
+    # Runs for the same repository are queued; a new run waits for the current one to finish.
+    concurrency:
+      group: draft-release-${{ github.repository }}
+      cancel-in-progress: false
     outputs:
       version:     ${{ steps.release.outputs.version }}
       tag:         ${{ steps.release.outputs.tag }}
