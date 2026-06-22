@@ -1,0 +1,47 @@
+name: "Test 6: Changelog Chaining"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Draft release
+        id: release
+        uses: hmcts/cnp-githubactions-library/draft-release@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update changelog
+        id: changelog
+        uses: hmcts/cnp-githubactions-library/update-changelog@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: ${{ steps.release.outputs.version }}
+          tag: ${{ steps.release.outputs.tag }}
+
+      - name: Validate changelog
+        run: |
+          if [ ! -f CHANGELOG.md ]; then
+            echo "❌ FAILED: CHANGELOG.md not created"
+            exit 1
+          fi
+          
+          VERSION="${{ steps.release.outputs.version }}"
+          if ! grep -q "\[$VERSION\]" CHANGELOG.md; then
+            echo "❌ FAILED: Version [$VERSION] not in CHANGELOG.md"
+            exit 1
+          fi
+          
+          echo "✅ PASS: Changelog updated with version $VERSION"
+          echo ""
+          echo "--- CHANGELOG Preview ---"
+          head -n 20 CHANGELOG.md

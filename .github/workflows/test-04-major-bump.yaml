@@ -1,0 +1,33 @@
+name: "Test 4: Major Bump (1.1.0 → 2.0.0)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  major-bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Test major bump
+        id: release
+        uses: hmcts/cnp-githubactions-library/draft-release@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          bump-type: major
+
+      - name: Validate major bump
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          
+          if [ "$VERSION" != "2.0.0" ]; then
+            echo "❌ FAILED: Expected 2.0.0, got $VERSION"
+            exit 1
+          fi
+          
+          echo "✅ PASS: Major bump successful → $VERSION"

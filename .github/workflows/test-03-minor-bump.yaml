@@ -1,0 +1,33 @@
+name: "Test 3: Minor Bump (1.0.1 → 1.1.0)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  minor-bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Test minor bump
+        id: release
+        uses: hmcts/cnp-githubactions-library/draft-release@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          bump-type: minor
+
+      - name: Validate minor bump
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          
+          if [ "$VERSION" != "1.1.0" ]; then
+            echo "❌ FAILED: Expected 1.1.0, got $VERSION"
+            exit 1
+          fi
+          
+          echo "✅ PASS: Minor bump successful → $VERSION"

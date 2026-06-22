@@ -1,0 +1,56 @@
+name: "Test 5: Idempotency (No Duplicates)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  idempotency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run 1 - Draft release
+        id: run1
+        uses: hmcts/cnp-githubactions-library/draft-release@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run 2 - Re-run same action
+        id: run2
+        uses: hmcts/cnp-githubactions-library/draft-release@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate idempotency
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V1="${{ steps.run1.outputs.version }}"
+          V2="${{ steps.run2.outputs.version }}"
+          TAG="${{ steps.run1.outputs.tag }}"
+          
+          if [ "$V1" != "$V2" ]; then
+            echo "❌ FAILED: Versions differ on rerun ($V1 vs $V2)"
+            exit 1
+          fi
+          
+          # Confirm the draft exists and is still a draft
+          DRAFT_CHECK=$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")
+          if [ "$DRAFT_CHECK" != "true" ]; then
+            echo "❌ FAILED: Release $TAG is not a draft"
+            exit 1
+          fi
+          
+          # Verify only one release exists for this tag (no duplicates created)
+          RELEASE_COUNT=$(gh release list --json tagName --jq "[.[] | select(.tagName == \"$TAG\")] | length" 2>/dev/null || echo "0")
+          if [ "$RELEASE_COUNT" -ne 1 ]; then
+            echo "❌ FAILED: Expected 1 release for $TAG, found $RELEASE_COUNT (duplicates detected)"
+            exit 1
+          fi
+          
+          echo "✅ PASS: Idempotent (version: $V1, still draft, no duplicates)"
