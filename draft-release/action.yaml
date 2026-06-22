@@ -120,14 +120,24 @@ runs:
 
         if [ -z "$NEXT_VERSION" ]; then
           # Idempotency guard: if a draft already exists for LATEST_TAG AND the tag came from GitHub
-          # (not a published git tag), return it without bumping. This ensures that re-running the
-          # action on the same commit (without new git tags) returns the same version.
-          # Once a version is published as a git tag, subsequent runs always bump (ignore drafts).
+          # (not a published git tag), check whether HEAD is the same commit the draft was created
+          # against. If it is, return the same version (idempotent). If HEAD has moved (new commits
+          # exist), fall through and bump normally.
+          # Once a version is published as a git tag (TAG_SOURCE=git), always bump — ignore drafts.
           if [ "$TAG_SOURCE" = "github" ] && [ -n "$LATEST_TAG" ]; then
-            DRAFT_EXISTS=$(gh release view "$LATEST_TAG" --json isDraft --jq 'select(.isDraft == true) | "yes"' 2>/dev/null || true)
-            if [ "$DRAFT_EXISTS" = "yes" ]; then
-              echo "Draft release already exists for ${LATEST_TAG} (from GitHub, not published) — returning without version bump (idempotent)."
-              NEXT_VERSION="${LATEST_TAG#"${TAG_PREFIX}"}"
+            RELEASE_INFO=$(gh release view "$LATEST_TAG" --json isDraft,targetCommitish 2>/dev/null || echo "")
+            if [ -n "$RELEASE_INFO" ]; then
+              IS_DRAFT=$(echo "$RELEASE_INFO" | jq -r 'select(.isDraft == true) | "yes"')
+              DRAFT_TARGET=$(echo "$RELEASE_INFO" | jq -r '.targetCommitish // ""')
+              if [ "$IS_DRAFT" = "yes" ] && [[ "$DRAFT_TARGET" =~ ^[0-9a-f]{40}$ ]]; then
+                HEAD_SHA=$(git rev-parse HEAD)
+                if [ "$DRAFT_TARGET" = "$HEAD_SHA" ]; then
+                  echo "Draft release already exists for ${LATEST_TAG} targeting current commit (${HEAD_SHA:0:7}) — returning without version bump (idempotent)."
+                  NEXT_VERSION="${LATEST_TAG#"${TAG_PREFIX}"}"
+                else
+                  echo "Draft release ${LATEST_TAG} exists but HEAD has moved (draft: ${DRAFT_TARGET:0:7}, HEAD: ${HEAD_SHA:0:7}) — bumping version."
+                fi
+              fi
             fi
           fi
 
@@ -199,6 +209,10 @@ runs:
           # Auto-generate notes only on create; leave notes unchanged on edit
           CREATE_FLAGS+=(--generate-notes)
         fi
+
+        # Record the exact commit SHA so subsequent runs can detect new commits for idempotency.
+        # Without this, GitHub stores the branch name (not a SHA) and commit detection breaks.
+        CREATE_FLAGS+=(--target "$(git rev-parse HEAD)")
 
         # If a draft release already exists for this tag, update it rather than create a duplicate
         EXISTING=$(gh release view "$TAG" --json isDraft --jq 'select(.isDraft == true) | "yes"' 2>/dev/null || true)
