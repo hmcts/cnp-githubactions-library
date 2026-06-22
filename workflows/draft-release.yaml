@@ -1,0 +1,99 @@
+name: Draft release
+
+on:
+  workflow_call:
+    inputs:
+      github-token:
+        description: |
+          GitHub token passed to the composite action. Defaults to the built-in github.token
+          (contents:write is sufficient for creating releases). Override with a PAT when you
+          need releases/tags created here to trigger other workflows — the default GITHUB_TOKEN
+          cannot trigger downstream workflow runs by design (GitHub limitation).
+        required: false
+        type: string
+        default: ''
+      bump-type:
+        description: 'Version component to increment: patch, minor, or major.'
+        required: false
+        type: string
+        default: 'patch'
+      tag-prefix:
+        description: 'String prepended to the version number when forming a tag (e.g. "v" produces v1.2.3).'
+        required: false
+        type: string
+        default: 'v'
+      initial-version:
+        description: 'Version to use when no prior tags exist (e.g. "1.0.0").'
+        required: false
+        type: string
+        default: '1.0.0'
+      draft:
+        description: 'Create as a draft release (true) or publish immediately (false).'
+        required: false
+        type: boolean
+        default: true
+      prerelease:
+        description: 'Mark the release as a pre-release.'
+        required: false
+        type: boolean
+        default: false
+      release-notes:
+        description: 'Custom release notes body. Leave blank to auto-generate from commit history.'
+        required: false
+        type: string
+        default: ''
+      runner:
+        description: 'GitHub Actions runner to use.'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      checkout-repository:
+        description: 'Whether to checkout the repository. Set to false if the caller already checked out.'
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      version:
+        description: 'New SemVer version without prefix (e.g. 1.0.1).'
+        value: ${{ jobs.draft-release.outputs.version }}
+      tag:
+        description: 'Full tag name including prefix (e.g. v1.0.1).'
+        value: ${{ jobs.draft-release.outputs.tag }}
+      release-url:
+        description: 'HTML URL of the created draft release.'
+        value: ${{ jobs.draft-release.outputs.release-url }}
+      release-id:
+        description: 'Numeric database ID of the created draft release.'
+        value: ${{ jobs.draft-release.outputs.release-id }}
+
+jobs:
+  draft-release:
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: write
+    outputs:
+      version:     ${{ steps.release.outputs.version }}
+      tag:         ${{ steps.release.outputs.tag }}
+      release-url: ${{ steps.release.outputs.release-url }}
+      release-id:  ${{ steps.release.outputs.release-id }}
+    steps:
+      - name: Checkout repository
+        if: inputs.checkout-repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Draft release
+        id: release
+        # Pinned to @main — the library does not yet tag its own releases.
+        # Once the library itself adopts draft-release (dogfooding), update this
+        # to a pinned tag/SHA for reproducible behaviour.
+        uses: hmcts/cnp-githubactions-library/draft-release@main
+        with:
+          github-token:    ${{ inputs.github-token != '' && inputs.github-token || github.token }}
+          bump-type:       ${{ inputs.bump-type }}
+          tag-prefix:      ${{ inputs.tag-prefix }}
+          initial-version: ${{ inputs.initial-version }}
+          draft:           ${{ inputs.draft }}
+          prerelease:      ${{ inputs.prerelease }}
+          release-notes:   ${{ inputs.release-notes }}

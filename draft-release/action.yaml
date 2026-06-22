@@ -1,0 +1,156 @@
+name: 'Draft Release'
+description: |
+  Calculate the next SemVer version from the latest tag and create (or update) a GitHub draft release.
+  IMPORTANT: The calling job must check out the repository with full tag history before invoking
+  this action (actions/checkout with fetch-depth: 0). Without it, no tags will be visible and
+  every run will silently bootstrap to the initial-version instead of incrementing correctly.
+author: 'HMCTS'
+
+inputs:
+  github-token:
+    description: 'GitHub token with contents:write permission (use secrets.GITHUB_TOKEN or a PAT).'
+    required: true
+  bump-type:
+    description: 'Version component to increment: patch, minor, or major. Defaults to patch.'
+    required: false
+    default: 'patch'
+  tag-prefix:
+    description: 'String prepended to the version number when forming a tag (e.g. "v" produces v1.2.3).'
+    required: false
+    default: 'v'
+  initial-version:
+    description: 'Version to use when no prior tags exist — the bootstrap case (e.g. "1.0.0").'
+    required: false
+    default: '1.0.0'
+  draft:
+    description: 'Create as a draft release (true) or publish immediately (false).'
+    required: false
+    default: 'true'
+  prerelease:
+    description: 'Mark the release as a pre-release.'
+    required: false
+    default: 'false'
+  release-notes:
+    description: 'Custom release notes body. Leave blank to auto-generate from commit history.'
+    required: false
+    default: ''
+
+outputs:
+  version:
+    description: 'New SemVer version without prefix (e.g. 1.0.1).'
+    value: ${{ steps.next-version.outputs.version }}
+  tag:
+    description: 'Full tag name including prefix (e.g. v1.0.1).'
+    value: ${{ steps.next-version.outputs.tag }}
+  release-url:
+    description: 'HTML URL of the created draft release.'
+    value: ${{ steps.create-release.outputs.url }}
+  release-id:
+    description: 'Numeric database ID of the created draft release.'
+    value: ${{ steps.create-release.outputs.id }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Calculate next version
+      id: next-version
+      shell: bash
+      env:
+        TAG_PREFIX: ${{ inputs.tag-prefix }}
+        BUMP_TYPE: ${{ inputs.bump-type }}
+        INITIAL_VERSION: ${{ inputs.initial-version }}
+      run: |
+        # Fetch all tags so the full history is available
+        git fetch --tags --quiet
+
+        # Find the most recent SemVer tag that matches the configured prefix
+        LATEST_TAG=$(git tag -l "${TAG_PREFIX}[0-9]*.[0-9]*.[0-9]*" | sort -V | tail -n1)
+
+        if [ -z "$LATEST_TAG" ]; then
+          echo "No existing tags found — bootstrapping with initial version: ${INITIAL_VERSION}"
+          NEXT_VERSION="${INITIAL_VERSION}"
+        else
+          CURRENT_VERSION="${LATEST_TAG#"${TAG_PREFIX}"}"
+
+          # Strip optional pre-release / build-metadata suffix to obtain core MAJOR.MINOR.PATCH
+          CORE_VERSION=$(echo "$CURRENT_VERSION" | cut -d'-' -f1 | cut -d'+' -f1)
+
+          if [[ ! "$CORE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Latest tag '${LATEST_TAG}' does not contain a valid MAJOR.MINOR.PATCH version."
+            exit 1
+          fi
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CORE_VERSION"
+
+          case "$BUMP_TYPE" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch|*) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEXT_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+        fi
+
+        NEXT_TAG="${TAG_PREFIX}${NEXT_VERSION}"
+
+        echo "Latest tag  : ${LATEST_TAG:-none}"
+        echo "Bump type   : ${BUMP_TYPE}"
+        echo "Next version: ${NEXT_VERSION}"
+        echo "Next tag    : ${NEXT_TAG}"
+
+        echo "version=${NEXT_VERSION}" >> "$GITHUB_OUTPUT"
+        echo "tag=${NEXT_TAG}"         >> "$GITHUB_OUTPUT"
+
+    - name: Create or update draft release
+      id: create-release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG: ${{ steps.next-version.outputs.tag }}
+        VERSION: ${{ steps.next-version.outputs.version }}
+        INPUT_DRAFT: ${{ inputs.draft }}
+        INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        CUSTOM_NOTES: ${{ inputs.release-notes }}
+      run: |
+        FLAGS=()
+        [[ "$INPUT_DRAFT"      == "true" ]] && FLAGS+=(--draft)
+        [[ "$INPUT_PRERELEASE" == "true" ]] && FLAGS+=(--prerelease)
+
+        # Write any custom notes to a temp file to avoid shell-injection risks
+        NOTES_FILE=$(mktemp)
+        trap 'rm -f "$NOTES_FILE"' EXIT
+
+        if [ -n "$CUSTOM_NOTES" ]; then
+          printf '%s' "$CUSTOM_NOTES" > "$NOTES_FILE"
+          FLAGS+=(--notes-file "$NOTES_FILE")
+        else
+          FLAGS+=(--generate-notes)
+        fi
+
+        # If a draft release already exists for this tag, update it rather than create a duplicate
+        EXISTING=$(gh release view "$TAG" --json isDraft --jq 'select(.isDraft == true) | "yes"' 2>/dev/null || true)
+
+        if [ "$EXISTING" = "yes" ]; then
+          echo "Updating existing draft release for ${TAG}"
+          gh release edit "$TAG" --title "Release ${VERSION}" "${FLAGS[@]}"
+        else
+          echo "Creating new release for ${TAG}"
+          gh release create "$TAG" --title "Release ${VERSION}" "${FLAGS[@]}"
+        fi
+
+        RELEASE_URL=$(gh release view "$TAG" --json url        --jq '.url'        2>/dev/null || echo "")
+        RELEASE_ID=$(gh release view  "$TAG" --json databaseId --jq '.databaseId' 2>/dev/null || echo "")
+
+        echo "url=${RELEASE_URL}" >> "$GITHUB_OUTPUT"
+        echo "id=${RELEASE_ID}"  >> "$GITHUB_OUTPUT"
+
+        {
+          echo "### Draft Release Summary"
+          echo ""
+          echo "| Field   | Value |"
+          echo "|---------|-------|"
+          echo "| Version | \`${VERSION}\` |"
+          echo "| Tag     | \`${TAG}\` |"
+          echo "| Draft   | ${INPUT_DRAFT} |"
+          echo "| URL     | ${RELEASE_URL} |"
+        } >> "$GITHUB_STEP_SUMMARY"

@@ -7,6 +7,11 @@ A reusable library of GitHub Actions workflows for HMCTS CNP (Cloud Native Platf
 ## 📋 Table of Contents
 
 - [Available Workflows](#available-workflows)
+  - [Container Build and Push](#container-build-and-push)
+  - [Helm Deploy](#helm-deploy)
+  - [npm Publish Library](#npm-publish-library)
+  - [Draft Release](#draft-release)
+  - [Update Changelog](#update-changelog)
 - [Usage](#usage)
 - [Contributing](#contributing)
 - [License](#license)
@@ -207,6 +212,149 @@ jobs:
 - Configurable install / build commands (yarn, npm, pnpm)
 - Yarn 4 + Corepack-friendly defaults
 - Outputs `releases_created` / `paths_released` for downstream steps
+
+### Draft Release
+
+Automatically calculate the next [SemVer](https://semver.org/) version from the latest tag and create a GitHub draft release. Every push to `main` produces a ready-to-publish draft; a human confirms before it goes live. Supports manual `major`/`minor` bump overrides via `workflow_dispatch` for breaking changes.
+
+**Available in Two Formats:**
+
+#### 1. Reusable Workflow (Simple, Standardised)
+Drop-in for repos that just want auto-drafting on every merge.
+
+📖 **[View workflow documentation](workflows/draft-release.md)**
+
+```yaml
+jobs:
+  release:
+    uses: hmcts/cnp-githubactions-library/workflows/draft-release.yaml@main
+```
+
+With optional manual bump override:
+
+```yaml
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      bump-type:
+        type: choice
+        options: [ patch, minor, major ]
+        default: patch
+
+jobs:
+  release:
+    uses: hmcts/cnp-githubactions-library/workflows/draft-release.yaml@main
+    with:
+      bump-type: ${{ inputs.bump-type || 'patch' }}
+```
+
+#### 2. Composite Action (Flexible, Extensible)
+Use when you need to chain the released version into a subsequent step.
+
+📖 **[View action documentation](draft-release/README.md)**
+
+```yaml
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Draft release
+        id: release
+        uses: hmcts/cnp-githubactions-library/draft-release@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Use version downstream
+        run: echo "Released ${{ steps.release.outputs.version }}"
+```
+
+**Features:**
+- Patch auto-increment on every merge (`1.0.0` → `1.0.1`)
+- Minor/major bump via manual `bump-type` override
+- Bootstrap-safe: creates `1.0.0` when no prior tags exist
+- Draft-only by default — publishes only when a human approves
+- Idempotent: re-running updates the existing draft rather than duplicating
+- Auto-generated release notes from commit history (or supply your own)
+- Outputs `version`, `tag`, `release-url`, and `release-id` for downstream jobs
+
+**SemVer Convention:**
+
+| Bump type | When to use | Example |
+|-----------|-------------|---------|
+| `patch` | Bug fixes, backwards-compatible improvements | `1.0.0` → `1.0.1` |
+| `minor` | New features, backwards-compatible | `1.0.1` → `1.1.0` |
+| `major` | Breaking changes | `1.1.0` → `2.0.0` |
+
+### Update Changelog
+
+Automatically prepend a new version section to `CHANGELOG.md` and commit it back to the branch. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. Designed to be chained after `draft-release` — pass its `version` and `tag` outputs straight in.
+
+**Available in Two Formats:**
+
+#### 1. Reusable Workflow (Simple, Standardised)
+Chain after the `draft-release` workflow with `needs:`.
+
+📖 **[View workflow documentation](workflows/update-changelog.md)**
+
+```yaml
+jobs:
+  draft:
+    uses: hmcts/cnp-githubactions-library/workflows/draft-release.yaml@main
+
+  changelog:
+    needs: draft
+    uses: hmcts/cnp-githubactions-library/workflows/update-changelog.yaml@main
+    with:
+      version: ${{ needs.draft.outputs.version }}
+      tag:     ${{ needs.draft.outputs.tag }}
+```
+
+#### 2. Composite Action (Flexible, Extensible)
+Use when both steps are in the same job.
+
+📖 **[View action documentation](update-changelog/README.md)**
+
+```yaml
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Draft release
+        id: release
+        uses: hmcts/cnp-githubactions-library/draft-release@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update changelog
+        uses: hmcts/cnp-githubactions-library/update-changelog@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version: ${{ steps.release.outputs.version }}
+          tag: ${{ steps.release.outputs.tag }}
+```
+
+**Features:**
+- Creates `CHANGELOG.md` from scratch if it doesn't exist (bootstrap-safe)
+- Auto-fetches release notes from the GitHub draft release
+- Falls back to `git log` if no notes are available
+- Newest entries first, following Keep a Changelog convention
+- Appends `[skip ci]` to the commit message to prevent recursive workflow runs
+- Idempotent — skips the commit if the changelog is already up to date
+- Outputs `changelog-path` and `committed` for downstream steps
 
 ## 📖 Usage
 
