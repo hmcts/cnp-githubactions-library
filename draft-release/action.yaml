@@ -96,6 +96,7 @@ runs:
 
         # Find the most recent SemVer git tag that matches the configured prefix
         LATEST_TAG=$(git tag -l "${TAG_PREFIX}[0-9]*.[0-9]*.[0-9]*" | sort -V | tail -n1)
+        TAG_SOURCE="git"
 
         if [ -z "$LATEST_TAG" ]; then
           # No published (git) tags yet — check if any GitHub releases already exist.
@@ -110,6 +111,7 @@ runs:
           if [ -n "$RELEASE_VERSION" ]; then
             echo "Found existing release tag in GitHub: ${RELEASE_VERSION} — using it as the base."
             LATEST_TAG="$RELEASE_VERSION"
+            TAG_SOURCE="github"
           else
             echo "No existing releases found — bootstrapping with initial version: ${INITIAL_VERSION}"
             NEXT_VERSION="${INITIAL_VERSION}"
@@ -117,12 +119,14 @@ runs:
         fi
 
         if [ -z "$NEXT_VERSION" ]; then
-          # Idempotency guard: if a draft already exists for LATEST_TAG, return it without bumping.
-          # This ensures that re-running the action on the same commit returns the same version.
-          if [ -n "$LATEST_TAG" ]; then
+          # Idempotency guard: if a draft already exists for LATEST_TAG AND the tag came from GitHub
+          # (not a published git tag), return it without bumping. This ensures that re-running the
+          # action on the same commit with no new git tags returns the same version.
+          # Note: If LATEST_TAG is a published git tag, we always bump regardless of existing drafts.
+          if [ "$TAG_SOURCE" = "github" ] && [ -n "$LATEST_TAG" ]; then
             DRAFT_EXISTS=$(gh release view "$LATEST_TAG" --json isDraft --jq 'select(.isDraft == true) | "yes"' 2>/dev/null || true)
             if [ "$DRAFT_EXISTS" = "yes" ]; then
-              echo "Draft release already exists for ${LATEST_TAG} — returning without version bump (idempotent)."
+              echo "Draft release already exists for ${LATEST_TAG} (from GitHub) — returning without version bump (idempotent)."
               NEXT_VERSION="${LATEST_TAG#"${TAG_PREFIX}"}"
             fi
           fi
