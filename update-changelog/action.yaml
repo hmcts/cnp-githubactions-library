@@ -132,15 +132,12 @@ runs:
           fi
         else
           # Bootstrap: create the changelog from scratch
-          cat > "$CHANGELOG" <<-'HEADER'
-          # Changelog
-
-          All notable changes to this project will be documented in this file.
-
-          The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-          and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-          HEADER
+          {
+            printf '# Changelog\n\n'
+            printf 'All notable changes to this project will be documented in this file.\n\n'
+            printf 'The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\n'
+            printf 'and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n'
+          } > "$CHANGELOG"
           printf '%s\n' "$NEW_ENTRY" >> "$CHANGELOG"
         fi
 
