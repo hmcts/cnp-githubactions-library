@@ -120,28 +120,14 @@ runs:
 
         if [ -z "$NEXT_VERSION" ]; then
           # Idempotency guard: if a draft already exists for LATEST_TAG AND the tag came from GitHub
-          # (not a published git tag) AND there are no new commits since that tag, return it without
-          # bumping. This ensures that re-running the action on the same commit returns the same version.
-          # If there ARE new commits since the tag, we bump even if a draft exists.
-          # Note: If LATEST_TAG is a published git tag, we always bump regardless of existing drafts.
+          # (not a published git tag), return it without bumping. This ensures that re-running the
+          # action on the same commit (without new git tags) returns the same version.
+          # Once a version is published as a git tag, subsequent runs always bump (ignore drafts).
           if [ "$TAG_SOURCE" = "github" ] && [ -n "$LATEST_TAG" ]; then
             DRAFT_EXISTS=$(gh release view "$LATEST_TAG" --json isDraft --jq 'select(.isDraft == true) | "yes"' 2>/dev/null || true)
             if [ "$DRAFT_EXISTS" = "yes" ]; then
-              # Check if there are new commits since this tag.
-              # If the tag doesn't exist as a git reference, assume there are new commits (bump).
-              if git rev-parse "${LATEST_TAG}" >/dev/null 2>&1; then
-                NEW_COMMITS=$(git log "${LATEST_TAG}..HEAD" --oneline 2>/dev/null | wc -l)
-              else
-                # Tag only exists in GitHub, not as a git ref — treat as new commits
-                NEW_COMMITS=1
-              fi
-              
-              if [ "$NEW_COMMITS" -eq 0 ]; then
-                echo "Draft release already exists for ${LATEST_TAG} (from GitHub) with no new commits — returning without version bump (idempotent)."
-                NEXT_VERSION="${LATEST_TAG#"${TAG_PREFIX}"}"
-              else
-                echo "Draft release exists for ${LATEST_TAG}, but $NEW_COMMITS new commit(s) found — bumping version."
-              fi
+              echo "Draft release already exists for ${LATEST_TAG} (from GitHub, not published) — returning without version bump (idempotent)."
+              NEXT_VERSION="${LATEST_TAG#"${TAG_PREFIX}"}"
             fi
           fi
 
