@@ -72,6 +72,13 @@ runs:
         TEMP_FILE=$(mktemp)
         trap 'rm -f "$TEMP_FILE"' EXIT
 
+        # Idempotency: if version already exists in changelog, skip update
+        if [ -f "$CHANGELOG" ] && grep -qF "## [$VERSION]" "$CHANGELOG"; then
+          echo "Version $VERSION already exists in $CHANGELOG — skipping update (idempotent)"
+          echo "changelog-path=$CHANGELOG" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
         if [ -f "$CHANGELOG" ]; then
           if grep -q '^## \[' "$CHANGELOG"; then
             # Prepend new entry before the first existing version heading.
