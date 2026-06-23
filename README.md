@@ -239,7 +239,7 @@ jobs:
       - uses: release-drafter/release-drafter@v6
         id: drafter
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
   changelog:
     needs: draft
@@ -296,7 +296,7 @@ jobs:
       - name: Update changelog
         uses: hmcts/cnp-githubactions-library/update-changelog@main
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           version: "1.0.1"   # version from Release Drafter or your own release step
           tag: "v1.0.1"
 ```

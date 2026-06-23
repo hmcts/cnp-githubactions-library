@@ -37,12 +37,12 @@ jobs:
         id: release
         uses: hmcts/cnp-githubactions-library/draft-release@main
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
 
       - name: Update changelog
         uses: hmcts/cnp-githubactions-library/update-changelog@main
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           version: ${{ steps.release.outputs.version }}
           tag: ${{ steps.release.outputs.tag }}
 ```
@@ -53,7 +53,7 @@ jobs:
       - name: Update changelog
         uses: hmcts/cnp-githubactions-library/update-changelog@main
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           version: ${{ steps.release.outputs.version }}
           tag: ${{ steps.release.outputs.tag }}
           release-notes: |
@@ -69,7 +69,7 @@ jobs:
       - name: Update changelog
         uses: hmcts/cnp-githubactions-library/update-changelog@main
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           version: ${{ steps.release.outputs.version }}
           tag: ${{ steps.release.outputs.tag }}
           changelog-path: docs/CHANGELOG.md
@@ -83,7 +83,7 @@ jobs:
         id: changelog
         uses: hmcts/cnp-githubactions-library/update-changelog@main
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           version: ${{ steps.release.outputs.version }}
           tag: ${{ steps.release.outputs.tag }}
 

@@ -18,7 +18,7 @@ jobs:
       - uses: release-drafter/release-drafter@v6
         id: drafter
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
   changelog:
     needs: draft
@@ -33,6 +33,6 @@ jobs:
 
       - uses: hmcts/cnp-githubactions-library/update-changelog@main
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           version: ${{ needs.draft.outputs.version }}
           tag:     ${{ needs.draft.outputs.tag }}
