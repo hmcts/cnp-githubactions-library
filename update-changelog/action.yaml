@@ -1,189 +1,118 @@
 name: 'Update Changelog'
-description: |
-  Prepend a new version section to CHANGELOG.md (creating it if absent) and commit it back to
-  the branch. Follows the Keep a Changelog format (https://keepachangelog.com) and pairs
-  naturally with the draft-release action — pass its version/tag outputs directly as inputs here.
-  IMPORTANT: The calling job must check out the repository before invoking this action, and the
-  token used must have contents:write permission to push the changelog commit.
+description: 'Prepend a new version section to CHANGELOG.md following Keep a Changelog format'
 author: 'HMCTS'
 
 inputs:
   github-token:
-    description: 'GitHub token with contents:write permission. Used to fetch release notes and push the changelog commit.'
+    description: 'GitHub token with contents:write permission'
     required: true
   version:
-    description: 'SemVer version string without prefix (e.g. 1.0.1). Accepts the version output from draft-release.'
+    description: 'SemVer version without prefix (e.g. 1.0.1)'
     required: true
   tag:
-    description: 'Full tag name including prefix (e.g. v1.0.1). Accepts the tag output from draft-release.'
+    description: 'Full tag including prefix (e.g. v1.0.1)'
     required: true
   changelog-path:
-    description: 'Path to the changelog file relative to the repository root.'
+    description: 'Path to the changelog file'
     required: false
     default: 'CHANGELOG.md'
   release-notes:
-    description: |
-      Release notes body to include in the changelog entry. Leave blank to auto-fetch from the
-      GitHub draft release for this tag (requires the draft-release action to have run first).
-      If the release cannot be found either, falls back to the git log since the previous tag.
+    description: 'Custom release notes. Leave blank to auto-fetch from GitHub release'
     required: false
     default: ''
-  git-user-name:
-    description: 'Git commit author name.'
-    required: false
-    default: 'github-actions[bot]'
-  git-user-email:
-    description: 'Git commit author email.'
-    required: false
-    default: 'github-actions[bot]@users.noreply.github.com'
-  commit-message:
-    description: 'Commit message for the changelog update. [skip ci] is appended automatically to prevent recursive workflow runs.'
-    required: false
-    default: 'docs: update CHANGELOG for {version}'
 
 outputs:
   changelog-path:
-    description: 'Path to the updated changelog file.'
+    description: 'Path to the updated changelog file'
     value: ${{ steps.update.outputs.changelog-path }}
   committed:
-    description: 'Whether a changelog commit was made (true/false).'
+    description: 'Whether a changelog commit was made (true or false)'
     value: ${{ steps.commit.outputs.committed }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Configure git identity
+    - name: Configure git
       shell: bash
-      env:
-        GIT_USER_NAME:  ${{ inputs.git-user-name }}
-        GIT_USER_EMAIL: ${{ inputs.git-user-email }}
       run: |
-        git config user.name  "$GIT_USER_NAME"
-        git config user.email "$GIT_USER_EMAIL"
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
 
     - name: Resolve release notes
       id: notes
       shell: bash
       env:
-        GH_TOKEN:      ${{ inputs.github-token }}
-        TAG:           ${{ inputs.tag }}
-        CUSTOM_NOTES:  ${{ inputs.release-notes }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG: ${{ inputs.tag }}
+        CUSTOM_NOTES: ${{ inputs.release-notes }}
       run: |
         if [ -n "$CUSTOM_NOTES" ]; then
-          echo "Using provided release notes."
           NOTES="$CUSTOM_NOTES"
         else
-          echo "Fetching release notes from GitHub draft release for ${TAG}..."
-          NOTES=$(gh release view "$TAG" --json body --jq '.body' 2>/dev/null || true)
-
-          if [ -z "$NOTES" ]; then
-            echo "Release not found or has no body — falling back to git log since previous tag."
-            PREV_TAG=$(git tag -l --sort=-version:refname | grep -v "^${TAG}$" | head -n1)
-            if [ -n "$PREV_TAG" ]; then
-              NOTES=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s" --no-merges)
-            else
-              NOTES=$(git log HEAD --pretty=format:"- %s" --no-merges | head -n 20)
-            fi
-          fi
+          # Fetch from GitHub release (Release Drafter populates this automatically)
+          NOTES=$(gh release view "$TAG" --json body --jq '.body' 2>/dev/null || echo "")
         fi
+        # Use EOF delimiter to safely handle multi-line notes
+        {
+          echo "notes<<EOF"
+          echo "$NOTES"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
 
-        # Write to a temp file to preserve multi-line content across steps
-        NOTES_FILE=$(mktemp)
-        printf '%s' "$NOTES" > "$NOTES_FILE"
-        echo "notes-file=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
-
-    - name: Update changelog file
+    - name: Update changelog
       id: update
       shell: bash
       env:
-        VERSION:        ${{ inputs.version }}
-        TAG:            ${{ inputs.tag }}
-        CHANGELOG:      ${{ inputs.changelog-path }}
-        NOTES_FILE:     ${{ steps.notes.outputs.notes-file }}
+        VERSION: ${{ inputs.version }}
+        TAG: ${{ inputs.tag }}
+        CHANGELOG: ${{ inputs.changelog-path }}
+        NOTES: ${{ steps.notes.outputs.notes }}
       run: |
-        # Idempotency guard — if a section for this version already exists, skip modification.
-        # This prevents duplicate entries on reruns within the same day or after a failed push.
-        if [ -f "$CHANGELOG" ] && grep -qF "## [${VERSION}]" "$CHANGELOG"; then
-          echo "Changelog already contains a section for ${VERSION} — skipping update."
-          rm -f "$NOTES_FILE"
-          echo "changelog-path=${CHANGELOG}" >> "$GITHUB_OUTPUT"
-          echo "already-exists=true"         >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
         DATE=$(date -u +%Y-%m-%d)
-        NOTES=$(cat "$NOTES_FILE")
-
-        # Build the new changelog entry
-        NEW_ENTRY="## [${VERSION}] - ${DATE}"$'\n\n'"${NOTES}"$'\n'
+        TEMP_FILE=$(mktemp)
+        trap 'rm -f "$TEMP_FILE"' EXIT
 
         if [ -f "$CHANGELOG" ]; then
-          # Insert after the first blank line following the header block (if any), else prepend
-          # Strategy: find the first '## ' heading and insert before it; fallback to prepend.
-          if grep -q '^## ' "$CHANGELOG"; then
-            # Prepend new entry before the first existing version section
-            FIRST_SECTION_LINE=$(grep -n '^## ' "$CHANGELOG" | head -n1 | cut -d: -f1)
-            HEAD_BLOCK=$(head -n $((FIRST_SECTION_LINE - 1)) "$CHANGELOG")
-            TAIL_BLOCK=$(tail -n +"${FIRST_SECTION_LINE}" "$CHANGELOG")
-            printf '%s\n\n%s\n\n%s\n' "$HEAD_BLOCK" "$NEW_ENTRY" "$TAIL_BLOCK" > "$CHANGELOG"
+          if grep -q '^## \[' "$CHANGELOG"; then
+            # Prepend new entry before the first existing version heading.
+            # Use head/tail rather than sed to correctly handle multi-line notes.
+            FIRST_LINE=$(grep -n '^## \[' "$CHANGELOG" | head -n1 | cut -d: -f1)
+            head -n "$((FIRST_LINE - 1))" "$CHANGELOG" >> "$TEMP_FILE"
+            printf '## [%s] - %s\n\n%s\n\n' "$VERSION" "$DATE" "$NOTES" >> "$TEMP_FILE"
+            tail -n "+${FIRST_LINE}" "$CHANGELOG" >> "$TEMP_FILE"
           else
-            # File exists but has no version sections yet — append after existing content
-            printf '\n%s\n' "$NEW_ENTRY" >> "$CHANGELOG"
+            cat "$CHANGELOG" >> "$TEMP_FILE"
+            printf '\n## [%s] - %s\n\n%s\n' "$VERSION" "$DATE" "$NOTES" >> "$TEMP_FILE"
           fi
         else
-          # Bootstrap: create the changelog from scratch
+          # Bootstrap: create a new changelog from scratch
           {
-            printf '# Changelog\n\n'
-            printf 'All notable changes to this project will be documented in this file.\n\n'
-            printf 'The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),\n'
-            printf 'and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n'
-          } > "$CHANGELOG"
-          printf '%s\n' "$NEW_ENTRY" >> "$CHANGELOG"
+            echo "# Changelog"
+            echo ""
+            echo "All notable changes to this project will be documented in this file."
+            echo ""
+            echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),"
+            echo "and this project adheres to [Semantic Versioning](https://semver.org/)."
+            echo ""
+            printf '## [%s] - %s\n\n%s\n' "$VERSION" "$DATE" "$NOTES"
+          } > "$TEMP_FILE"
         fi
 
-        # Clean up temp file
-        rm -f "$NOTES_FILE"
+        mv "$TEMP_FILE" "$CHANGELOG"
+        echo "changelog-path=$CHANGELOG" >> "$GITHUB_OUTPUT"
 
-        echo "changelog-path=${CHANGELOG}" >> "$GITHUB_OUTPUT"
-        echo "Changelog updated at ${CHANGELOG}"
-        echo "--- Preview (first 40 lines) ---"
-        head -n 40 "$CHANGELOG"
-
-    - name: Commit and push changelog
+    - name: Commit and push
       id: commit
       shell: bash
       env:
-        VERSION:        ${{ inputs.version }}
-        CHANGELOG:      ${{ inputs.changelog-path }}
-        COMMIT_MSG_TPL: ${{ inputs.commit-message }}
-        ALREADY_EXISTS: ${{ steps.update.outputs.already-exists }}
+        VERSION: ${{ inputs.version }}
+        CHANGELOG: ${{ inputs.changelog-path }}
       run: |
-        if [ "$ALREADY_EXISTS" = "true" ]; then
-          echo "Changelog section already existed — no commit needed."
-          echo "committed=false" >> "$GITHUB_OUTPUT"
+        git add "$CHANGELOG"
+        if ! git diff --cached --quiet; then
+          git commit -m "docs: update CHANGELOG for $VERSION [skip ci]"
+          git push origin HEAD
+          echo "committed=true" >> "$GITHUB_OUTPUT"
         else
-          git add "$CHANGELOG"
-
-          if git diff --cached --quiet; then
-            echo "No changes to commit — changelog already up to date."
-            echo "committed=false" >> "$GITHUB_OUTPUT"
-          else
-            # Substitute {version} placeholder and append [skip ci] to prevent recursive runs
-            COMMIT_MSG="${COMMIT_MSG_TPL//\{version\}/${VERSION}} [skip ci]"
-            git commit -m "$COMMIT_MSG"
-            # Explicit ref avoids fragility with detached HEAD or custom checkout refs
-            git push origin HEAD
-            echo "committed=true" >> "$GITHUB_OUTPUT"
-            echo "Pushed changelog commit: ${COMMIT_MSG}"
-          fi
+          echo "committed=false" >> "$GITHUB_OUTPUT"
         fi
-
-        {
-          echo "### Changelog Update Summary 📝"
-          echo ""
-          echo "| Field   | Value |"
-          echo "|---------|-------|"
-          echo "| Version | \`${VERSION}\` |"
-          echo "| File    | \`${CHANGELOG}\` |"
-          echo "| Committed | $(cat $GITHUB_OUTPUT | grep '^committed=' | cut -d= -f2) |"
-        } >> "$GITHUB_STEP_SUMMARY"

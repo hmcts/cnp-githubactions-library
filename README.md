@@ -215,102 +215,62 @@ jobs:
 
 ### Draft Release
 
-Automatically calculate the next [SemVer](https://semver.org/) version from the latest tag and create a GitHub draft release. Every push to `main` produces a ready-to-publish draft; a human confirms before it goes live. Supports manual `major`/`minor` bump overrides via `workflow_dispatch` for breaking changes.
+Automatically draft GitHub releases on every push to `main` using [Release Drafter](https://github.com/release-drafter/release-drafter). Release notes are generated from merged PR titles and labels. A human publishes the draft when ready.
 
-**Available in Two Formats:**
-
-#### 1. Reusable Workflow (Simple, Standardised)
-Drop-in for repos that just want auto-drafting on every merge.
-
-📖 **[View workflow documentation](workflows/draft-release.md)**
+Add this workflow to your repo's `.github/workflows/` directory:
 
 ```yaml
-jobs:
-  release:
-    uses: hmcts/cnp-githubactions-library/workflows/draft-release.yaml@main
-```
+name: Release Drafter
 
-With optional manual bump override:
-
-```yaml
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
-    inputs:
-      bump-type:
-        type: choice
-        options: [ patch, minor, major ]
-        default: patch
 
 jobs:
-  release:
-    uses: hmcts/cnp-githubactions-library/workflows/draft-release.yaml@main
-    with:
-      bump-type: ${{ inputs.bump-type || 'patch' }}
-```
-
-#### 2. Composite Action (Flexible, Extensible)
-Use when you need to chain the released version into a subsequent step.
-
-📖 **[View action documentation](draft-release/README.md)**
-
-```yaml
-jobs:
-  release:
+  draft:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.drafter.outputs.resolved_version }}
+      tag:     ${{ steps.drafter.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: release-drafter/release-drafter@v6
+        id: drafter
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Draft release
-        id: release
-        uses: hmcts/cnp-githubactions-library/draft-release@main
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Use version downstream
-        run: echo "Released ${{ steps.release.outputs.version }}"
+  changelog:
+    needs: draft
+    if: needs.draft.outputs.version != ''
+    uses: hmcts/cnp-githubactions-library/workflows/update-changelog.yaml@main
+    with:
+      version: ${{ needs.draft.outputs.version }}
+      tag:     ${{ needs.draft.outputs.tag }}
 ```
 
 **Features:**
-- Patch auto-increment on every merge (`1.0.0` → `1.0.1`)
-- Minor/major bump via manual `bump-type` override
-- Bootstrap-safe: creates `1.0.0` when no prior tags exist
+- Release notes automatically generated from merged PR titles and labels
 - Draft-only by default — publishes only when a human approves
-- Idempotent: re-running updates the existing draft rather than duplicating
-- Auto-generated release notes from commit history (or supply your own)
-- Outputs `version`, `tag`, `release-url`, and `release-id` for downstream jobs
-
-**SemVer Convention:**
-
-| Bump type | When to use | Example |
-|-----------|-------------|---------|
-| `patch` | Bug fixes, backwards-compatible improvements | `1.0.0` → `1.0.1` |
-| `minor` | New features, backwards-compatible | `1.0.1` → `1.1.0` |
-| `major` | Breaking changes | `1.1.0` → `2.0.0` |
+- `CHANGELOG.md` updated automatically via the `update-changelog` reusable workflow
+- Callers can customise note categories via `.github/release-drafter.yml` in their own repo
 
 ### Update Changelog
 
-Automatically prepend a new version section to `CHANGELOG.md` and commit it back to the branch. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. Designed to be chained after `draft-release` — pass its `version` and `tag` outputs straight in.
+Automatically prepend a new version section to `CHANGELOG.md` and commit it back to the branch. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. Pass the `version` and `tag` outputs from the draft job straight in.
 
 **Available in Two Formats:**
 
 #### 1. Reusable Workflow (Simple, Standardised)
-Chain after the `draft-release` workflow with `needs:`.
+Call from the `changelog` job in your Release Drafter workflow (see example above).
 
 📖 **[View workflow documentation](workflows/update-changelog.md)**
 
 ```yaml
-jobs:
-  draft:
-    uses: hmcts/cnp-githubactions-library/workflows/draft-release.yaml@main
-
   changelog:
     needs: draft
+    if: needs.draft.outputs.version != ''
     uses: hmcts/cnp-githubactions-library/workflows/update-changelog.yaml@main
     with:
       version: ${{ needs.draft.outputs.version }}
@@ -318,7 +278,7 @@ jobs:
 ```
 
 #### 2. Composite Action (Flexible, Extensible)
-Use when both steps are in the same job.
+Use when you need to update the changelog within an existing job.
 
 📖 **[View action documentation](update-changelog/README.md)**
 
@@ -333,27 +293,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Draft release
-        id: release
-        uses: hmcts/cnp-githubactions-library/draft-release@main
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Update changelog
         uses: hmcts/cnp-githubactions-library/update-changelog@main
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          version: ${{ steps.release.outputs.version }}
-          tag: ${{ steps.release.outputs.tag }}
+          version: "1.0.1"   # version from Release Drafter or your own release step
+          tag: "v1.0.1"
 ```
 
 **Features:**
 - Creates `CHANGELOG.md` from scratch if it doesn't exist (bootstrap-safe)
-- Auto-fetches release notes from the GitHub draft release
-- Falls back to `git log` if no notes are available
-- Newest entries first, following Keep a Changelog convention
+- Auto-fetches release notes from the GitHub draft release (populated by Release Drafter)
+- Entries are prepended in newest-first order, following Keep a Changelog convention
 - Appends `[skip ci]` to the commit message to prevent recursive workflow runs
-- Idempotent — skips the commit if the changelog is already up to date
 - Outputs `changelog-path` and `committed` for downstream steps
 
 ## 📖 Usage
