@@ -22,7 +22,7 @@ on:
       labels:
         description: >
           JSON array of label names currently on the PR.
-          Pass using: toJson(github.event.pull_request.labels.*.name)
+          Pass the pull request labels from the calling workflow.
         required: true
         type: string
       extra-allowed-labels:
