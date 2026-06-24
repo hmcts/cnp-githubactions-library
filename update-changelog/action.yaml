@@ -20,6 +20,18 @@ inputs:
     description: 'Custom release notes. Leave blank to auto-fetch from GitHub release'
     required: false
     default: ''
+  git-user-name:
+    description: 'Git commit author name'
+    required: false
+    default: 'github-actions[bot]'
+  git-user-email:
+    description: 'Git commit author email'
+    required: false
+    default: 'github-actions[bot]@users.noreply.github.com'
+  commit-message:
+    description: 'Commit message. Use {version} as a placeholder for the version number.'
+    required: false
+    default: 'docs: update CHANGELOG for {version} [skip ci]'
 
 outputs:
   changelog-path:
@@ -35,8 +47,8 @@ runs:
     - name: Configure git
       shell: bash
       run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git config user.name "${{ inputs.git-user-name }}"
+        git config user.email "${{ inputs.git-user-email }}"
 
     - name: Resolve release notes
       id: notes
@@ -114,10 +126,12 @@ runs:
       env:
         VERSION: ${{ inputs.version }}
         CHANGELOG: ${{ inputs.changelog-path }}
+        COMMIT_MSG_TEMPLATE: ${{ inputs.commit-message }}
       run: |
         git add "$CHANGELOG"
         if ! git diff --cached --quiet; then
-          git commit -m "docs: update CHANGELOG for $VERSION [skip ci]"
+          MSG="${COMMIT_MSG_TEMPLATE//\{version\}/$VERSION}"
+          git commit -m "$MSG"
           git push origin HEAD
           echo "committed=true" >> "$GITHUB_OUTPUT"
         else

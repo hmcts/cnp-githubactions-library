@@ -32,10 +32,10 @@ on:
         type: string
         default: 'github-actions[bot]@users.noreply.github.com'
       commit-message:
-        description: 'Commit message template. Use {version} as a placeholder. [skip ci] is appended automatically.'
+        description: 'Commit message template. Use {version} as a placeholder for the version number.'
         required: false
         type: string
-        default: 'docs: update CHANGELOG for {version}'
+        default: 'docs: update CHANGELOG for {version} [skip ci]'
       runner:
         description: 'GitHub Actions runner to use.'
         required: false
