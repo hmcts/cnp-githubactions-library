@@ -14,7 +14,7 @@ name: PR Label Check
 #     labels:
 #       uses: hmcts/cnp-githubactions-library/workflows/label-check.yaml@main
 #       with:
-#         labels: ${{ toJson(github.event.pull_request.labels.*.name) }}
+#         labels: toJson(github.event.pull_request.labels.*.name)
 
 on:
   workflow_call:
@@ -22,7 +22,7 @@ on:
       labels:
         description: >
           JSON array of label names currently on the PR.
-          Pass: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          Pass the pull request labels from the calling workflow.
         required: true
         type: string
       extra-allowed-labels:
