@@ -14,7 +14,7 @@ name: PR Label Check
 #     labels:
 #       uses: hmcts/cnp-githubactions-library/workflows/label-check.yaml@main
 #       with:
-#         labels: ${{ toJson(github.event.pull_request.labels.*.name) }}
+#         labels: toJson(github.event.pull_request.labels.*.name)
 
 on:
   workflow_call:
