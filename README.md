@@ -7,6 +7,11 @@ A reusable library of GitHub Actions workflows for HMCTS CNP (Cloud Native Platf
 ## 📋 Table of Contents
 
 - [Available Workflows](#available-workflows)
+  - [Container Build and Push](#container-build-and-push)
+  - [Helm Deploy](#helm-deploy)
+  - [npm Publish Library](#npm-publish-library)
+  - [Draft Release](#draft-release)
+  - [Update Changelog](#update-changelog)
 - [Usage](#usage)
 - [Contributing](#contributing)
 - [License](#license)
@@ -207,6 +212,101 @@ jobs:
 - Configurable install / build commands (yarn, npm, pnpm)
 - Yarn 4 + Corepack-friendly defaults
 - Outputs `releases_created` / `paths_released` for downstream steps
+
+### Draft Release
+
+Automatically draft GitHub releases on every push to `main` using [Release Drafter](https://github.com/release-drafter/release-drafter). Release notes are generated from merged PR titles and labels. A human publishes the draft when ready.
+
+Add this workflow to your repo's `.github/workflows/` directory:
+
+```yaml
+name: Release Drafter
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.drafter.outputs.resolved_version }}
+      tag:     ${{ steps.drafter.outputs.tag_name }}
+    steps:
+      - uses: release-drafter/release-drafter@v6
+        id: drafter
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  changelog:
+    needs: draft
+    if: needs.draft.outputs.version != ''
+    uses: hmcts/cnp-githubactions-library/workflows/update-changelog.yaml@main
+    with:
+      version: ${{ needs.draft.outputs.version }}
+      tag:     ${{ needs.draft.outputs.tag }}
+```
+
+**Features:**
+- Release notes automatically generated from merged PR titles and labels
+- Draft-only by default — publishes only when a human approves
+- `CHANGELOG.md` updated automatically via the `update-changelog` reusable workflow
+- Callers can customise note categories via `.github/release-drafter.yml` in their own repo
+
+### Update Changelog
+
+Automatically prepend a new version section to `CHANGELOG.md` and commit it back to the branch. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. Pass the `version` and `tag` outputs from the draft job straight in.
+
+**Available in Two Formats:**
+
+#### 1. Reusable Workflow (Simple, Standardised)
+Call from the `changelog` job in your Release Drafter workflow (see example above).
+
+📖 **[View workflow documentation](workflows/update-changelog.md)**
+
+```yaml
+  changelog:
+    needs: draft
+    if: needs.draft.outputs.version != ''
+    uses: hmcts/cnp-githubactions-library/workflows/update-changelog.yaml@main
+    with:
+      version: ${{ needs.draft.outputs.version }}
+      tag:     ${{ needs.draft.outputs.tag }}
+```
+
+#### 2. Composite Action (Flexible, Extensible)
+Use when you need to update the changelog within an existing job.
+
+📖 **[View action documentation](update-changelog/README.md)**
+
+```yaml
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update changelog
+        uses: hmcts/cnp-githubactions-library/update-changelog@main
+        with:
+          github-token: ${{ github.token }}
+          version: "1.0.1"   # version from Release Drafter or your own release step
+          tag: "v1.0.1"
+```
+
+**Features:**
+- Creates `CHANGELOG.md` from scratch if it doesn't exist (bootstrap-safe)
+- Auto-fetches release notes from the GitHub draft release (populated by Release Drafter)
+- Entries are prepended in newest-first order, following Keep a Changelog convention
+- Appends `[skip ci]` to the commit message to prevent recursive workflow runs
+- Outputs `changelog-path` and `committed` for downstream steps
 
 ## 📖 Usage
 

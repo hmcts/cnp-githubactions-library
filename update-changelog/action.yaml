@@ -1,0 +1,139 @@
+name: 'Update Changelog'
+description: 'Prepend a new version section to CHANGELOG.md following Keep a Changelog format'
+author: 'HMCTS'
+
+inputs:
+  github-token:
+    description: 'GitHub token with contents:write permission'
+    required: true
+  version:
+    description: 'SemVer version without prefix (e.g. 1.0.1)'
+    required: true
+  tag:
+    description: 'Full tag including prefix (e.g. v1.0.1)'
+    required: true
+  changelog-path:
+    description: 'Path to the changelog file'
+    required: false
+    default: 'CHANGELOG.md'
+  release-notes:
+    description: 'Custom release notes. Leave blank to auto-fetch from GitHub release'
+    required: false
+    default: ''
+  git-user-name:
+    description: 'Git commit author name'
+    required: false
+    default: 'github-actions[bot]'
+  git-user-email:
+    description: 'Git commit author email'
+    required: false
+    default: 'github-actions[bot]@users.noreply.github.com'
+  commit-message:
+    description: 'Commit message. Use {version} as a placeholder for the version number.'
+    required: false
+    default: 'docs: update CHANGELOG for {version} [skip ci]'
+
+outputs:
+  changelog-path:
+    description: 'Path to the updated changelog file'
+    value: ${{ steps.update.outputs.changelog-path }}
+  committed:
+    description: 'Whether a changelog commit was made (true or false)'
+    value: ${{ steps.commit.outputs.committed }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure git
+      shell: bash
+      run: |
+        git config user.name "${{ inputs.git-user-name }}"
+        git config user.email "${{ inputs.git-user-email }}"
+
+    - name: Resolve release notes
+      id: notes
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TAG: ${{ inputs.tag }}
+        CUSTOM_NOTES: ${{ inputs.release-notes }}
+      run: |
+        if [ -n "$CUSTOM_NOTES" ]; then
+          NOTES="$CUSTOM_NOTES"
+        else
+          # Fetch from GitHub release (Release Drafter populates this automatically)
+          NOTES=$(gh release view "$TAG" --json body --jq '.body' 2>/dev/null || echo "")
+        fi
+        # Use EOF delimiter to safely handle multi-line notes
+        {
+          echo "notes<<EOF"
+          echo "$NOTES"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Update changelog
+      id: update
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        TAG: ${{ inputs.tag }}
+        CHANGELOG: ${{ inputs.changelog-path }}
+        NOTES: ${{ steps.notes.outputs.notes }}
+      run: |
+        DATE=$(date -u +%Y-%m-%d)
+        TEMP_FILE=$(mktemp)
+        trap 'rm -f "$TEMP_FILE"' EXIT
+
+        # Idempotency: if version already exists in changelog, skip update
+        if [ -f "$CHANGELOG" ] && grep -qF "## [$VERSION]" "$CHANGELOG"; then
+          echo "Version $VERSION already exists in $CHANGELOG — skipping update (idempotent)"
+          echo "changelog-path=$CHANGELOG" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [ -f "$CHANGELOG" ]; then
+          if grep -q '^## \[' "$CHANGELOG"; then
+            # Prepend new entry before the first existing version heading.
+            # Use head/tail rather than sed to correctly handle multi-line notes.
+            FIRST_LINE=$(grep -n '^## \[' "$CHANGELOG" | head -n1 | cut -d: -f1)
+            head -n "$((FIRST_LINE - 1))" "$CHANGELOG" >> "$TEMP_FILE"
+            printf '## [%s] - %s\n\n%s\n\n' "$VERSION" "$DATE" "$NOTES" >> "$TEMP_FILE"
+            tail -n "+${FIRST_LINE}" "$CHANGELOG" >> "$TEMP_FILE"
+          else
+            cat "$CHANGELOG" >> "$TEMP_FILE"
+            printf '\n## [%s] - %s\n\n%s\n' "$VERSION" "$DATE" "$NOTES" >> "$TEMP_FILE"
+          fi
+        else
+          # Bootstrap: create a new changelog from scratch
+          {
+            echo "# Changelog"
+            echo ""
+            echo "All notable changes to this project will be documented in this file."
+            echo ""
+            echo "The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),"
+            echo "and this project adheres to [Semantic Versioning](https://semver.org/)."
+            echo ""
+            printf '## [%s] - %s\n\n%s\n' "$VERSION" "$DATE" "$NOTES"
+          } > "$TEMP_FILE"
+        fi
+
+        mv "$TEMP_FILE" "$CHANGELOG"
+        echo "changelog-path=$CHANGELOG" >> "$GITHUB_OUTPUT"
+
+    - name: Commit and push
+      id: commit
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        CHANGELOG: ${{ inputs.changelog-path }}
+        COMMIT_MSG_TEMPLATE: ${{ inputs.commit-message }}
+      run: |
+        git add "$CHANGELOG"
+        if ! git diff --cached --quiet; then
+          MSG="${COMMIT_MSG_TEMPLATE//\{version\}/$VERSION}"
+          git commit -m "$MSG"
+          git push origin HEAD
+          echo "committed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "committed=false" >> "$GITHUB_OUTPUT"
+        fi
