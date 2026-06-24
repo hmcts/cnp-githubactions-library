@@ -1,3 +1,4 @@
+# This is an example workflow for using the Release Drafter action and the update-changelog action together to automatically draft a release and update the changelog file.
 name: Release Drafter
 
 on:
@@ -15,6 +16,8 @@ jobs:
       version: ${{ steps.drafter.outputs.resolved_version }}
       tag:     ${{ steps.drafter.outputs.tag_name }}
     steps:
+      - uses: actions/checkout@v4
+
       - uses: release-drafter/release-drafter@v6
         id: drafter
         env:
@@ -31,7 +34,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: hmcts/cnp-githubactions-library/update-changelog@main
+      - uses: ./update-changelog
         with:
           github-token: ${{ github.token }}
           version: ${{ needs.draft.outputs.version }}
