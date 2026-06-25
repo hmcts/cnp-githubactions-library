@@ -1,88 +1,163 @@
 name: PR Label Check
 
-# Reusable workflow that validates a pull request has at least one recognised
-# release label. Without a label, Release Drafter cannot determine the correct
-# version bump (patch / minor / major) or categorise the PR in the release notes.
+# Reusable workflow that:
+#   1. Auto-applies a release label based on the PR title's conventional commit prefix.
+#   2. Validates that at least one recognised release label exists.
+#   3. Posts a helpful PR comment when the check fails.
 #
-# Usage — add this to a .github/workflows/pr-label-check.yaml in your repo:
+# Usage — add this to .github/workflows/pr-label-check.yaml in your repo:
 #
 #   on:
 #     pull_request:
-#       types: [labeled, unlabeled, opened, reopened, synchronize]
+#       types: [opened, edited, synchronize, labeled, unlabeled]
 #
 #   jobs:
-#     labels:
-#       uses: hmcts/cnp-githubactions-library/workflows/label-check.yaml@main
-#       with:
-#         labels: toJson(github.event.pull_request.labels.*.name)
+#     label-check:
+#       uses: hmcts/cnp-githubactions-library/.github/workflows/label-check.yaml@main
+#       permissions:
+#         pull-requests: write
 
 on:
   workflow_call:
-    inputs:
-      labels:
-        description: >
-          JSON array of label names currently on the PR.
-          Pass the pull request labels from the calling workflow.
-        required: true
-        type: string
-      extra-allowed-labels:
-        description: >
-          Space-separated list of additional project-specific labels to accept,
-          beyond the standard set. Optional.
-        required: false
-        type: string
-        default: ''
 
 jobs:
-  check:
-    name: Validate release label
+  auto-label:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     steps:
-      - name: Check for required release label
+      - name: Apply label based on PR title prefix
         env:
-          PR_LABELS: ${{ inputs.labels }}
-          EXTRA: ${{ inputs.extra-allowed-labels }}
+          GH_TOKEN: ${{ github.token }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
-          # HMCTS standard release labels — aligned with .github/release-drafter.yml
+          set -euo pipefail
+          echo "PR title: $PR_TITLE"
+
+          case "$PR_TITLE" in
+            feat:*|feat\(*\):*)
+              LABEL="enhancement" ;;
+            fix:*|fix\(*\):*)
+              LABEL="bug" ;;
+            chore:*|chore\(*\):*)
+              LABEL="chore" ;;
+            docs:*|docs\(*\):*)
+              LABEL="documentation" ;;
+            deps:*|deps\(*\):*|build:*|build\(*\):*)
+              LABEL="dependencies" ;;
+            *)
+              echo "No conventional commit prefix found — no label applied"
+              exit 0 ;;
+          esac
+
+          echo "Applying label: $LABEL"
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$LABEL"
+
+  check-labels:
+    needs: auto-label
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Fetch current PR labels
+        id: labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          LABELS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '.labels[].name')
+          LABELS_JSON=$(echo "$LABELS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          printf 'pr_labels=%s\n' "$LABELS_JSON" >> "$GITHUB_OUTPUT"
+          printf 'Labels: %s\n' "$LABELS_JSON"
+
+      - name: Check labels
+        env:
+          PR_LABELS: ${{ steps.labels.outputs.pr_labels }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
           STANDARD_LABELS="breaking-change enhancement bug dependencies documentation chore"
+          ALLOWED="$STANDARD_LABELS"
 
-          ALLOWED="$STANDARD_LABELS $EXTRA"
-
-          # Check skip label first — valid, just excluded from release notes
-          if echo "$PR_LABELS" | grep -qi '"skip-changelog"'; then
+          # Check skip label first
+          if echo "$PR_LABELS" | grep -iq 'skip-changelog'; then
             echo "✅ PR has skip label: skip-changelog — will be excluded from release notes"
             exit 0
           fi
 
           FOUND_LABEL=""
           for label in $ALLOWED; do
-            # Match whole label name (case-insensitive) inside the JSON array
-            if echo "$PR_LABELS" | grep -qi "\"$label\""; then
+            if echo "$PR_LABELS" | grep -iq "$label"; then
               FOUND_LABEL="$label"
               break
             fi
           done
 
+          # Check if title follows conventional commit format
+          VALID_TITLE=false
+          case "$PR_TITLE" in
+            feat:*|feat\(*\):*|\
+            fix:*|fix\(*\):*|\
+            chore:*|chore\(*\):*|\
+            docs:*|docs\(*\):*|\
+            deps:*|deps\(*\):*|\
+            build:*|build\(*\):*)
+              VALID_TITLE=true ;;
+          esac
+
+          post_comment() {
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$1"
+          }
+
           if [ -z "$FOUND_LABEL" ]; then
-            echo "❌ This PR is missing a release label."
-            echo ""
-            echo "Add one of the following labels before merging:"
-            echo ""
-            echo "  breaking-change   →  major bump  (1.0.0 → 2.0.0)  API breaks, removals"
-            echo "  enhancement       →  minor bump  (1.0.0 → 1.1.0)  new features"
-            echo "  bug               →  patch bump  (1.0.0 → 1.0.1)  bug fixes"
-            echo "  dependencies      →  patch bump                    dependency updates"
-            echo "  documentation     →  patch bump                    docs-only changes"
-            echo "  chore             →  patch bump                    maintenance, refactoring"
-            echo "  skip-changelog    →  no bump                       excluded from release notes"
-            echo ""
-            echo "Current labels on this PR: $PR_LABELS"
+            if [ "$VALID_TITLE" = "false" ]; then
+              MSG="## ❌ PR Label Check Failed"$'\n\n'
+              MSG+="Your PR title does not follow the conventional commit format so a label could not be applied automatically."$'\n\n'
+              MSG+="### Update your PR title to one of these formats:"$'\n\n'
+              MSG+="| Prefix | Label applied | Version bump |"$'\n'
+              MSG+="|--------|--------------|--------------|"$'\n'
+              MSG+="| \`feat: description\` | enhancement | minor 1.0.0 → 1.1.0 |"$'\n'
+              MSG+="| \`fix: description\` | bug | patch 1.0.0 → 1.0.1 |"$'\n'
+              MSG+="| \`chore: description\` | chore | patch 1.0.0 → 1.0.1 |"$'\n'
+              MSG+="| \`docs: description\` | documentation | patch 1.0.0 → 1.0.1 |"$'\n'
+              MSG+="| \`deps: description\` | dependencies | patch 1.0.0 → 1.0.1 |"$'\n\n'
+              MSG+="**Examples:**"$'\n'
+              MSG+="- \`feat: add RBAC support for key vaults\`"$'\n'
+              MSG+="- \`fix: correct token expiry handling\`"$'\n'
+              MSG+="- \`chore: update terraform module version\`"$'\n\n'
+              MSG+="> ⚠️ **Breaking changes** cannot be auto-detected. Add the \`breaking-change\` label manually."$'\n\n'
+              MSG+="Once you update the title this check will re-run automatically."
+            else
+              MSG="## ❌ PR Label Check Failed"$'\n\n'
+              MSG+="Your title format is correct but no release label was found."$'\n\n'
+              MSG+="**Try pushing an empty commit to retrigger:**"$'\n\n'
+              MSG+='```'$'\n'
+              MSG+="git commit --allow-empty -m 'chore: retrigger checks'"$'\n'
+              MSG+="git push"$'\n'
+              MSG+='```'$'\n\n'
+              MSG+="Or manually add one of these labels to the PR:"$'\n\n'
+              MSG+="| Label | Version bump |"$'\n'
+              MSG+="|-------|-------------|"$'\n'
+              MSG+="| breaking-change | major 1.0.0 → 2.0.0 |"$'\n'
+              MSG+="| enhancement | minor 1.0.0 → 1.1.0 |"$'\n'
+              MSG+="| bug | patch 1.0.0 → 1.0.1 |"$'\n'
+              MSG+="| dependencies | patch |"$'\n'
+              MSG+="| documentation | patch |"$'\n'
+              MSG+="| chore | patch |"$'\n'
+              MSG+="| skip-changelog | excluded from release notes |"
+            fi
+            post_comment "$MSG"
             exit 1
           fi
 
           echo "✅ PR has release label: '$FOUND_LABEL'"
-          echo ""
-          echo "This label maps to:"
           case "$FOUND_LABEL" in
             breaking-change)
               echo "  → major version bump  (e.g. 1.2.3 → 2.0.0)"
@@ -90,10 +165,7 @@ jobs:
             enhancement)
               echo "  → minor version bump  (e.g. 1.2.3 → 1.3.0)"
               ;;
-            bug|dependencies|documentation|chore)
-              echo "  → patch version bump  (e.g. 1.2.3 → 1.2.4)"
-              ;;
             *)
-              echo "  → patch version bump  (e.g. 1.2.3 → 1.2.4)  [via extra-allowed-labels]"
+              echo "  → patch version bump  (e.g. 1.2.3 → 1.2.4)"
               ;;
           esac
