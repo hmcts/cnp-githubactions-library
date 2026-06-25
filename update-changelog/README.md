@@ -1,12 +1,11 @@
 # Update Changelog Action
 
-A composite GitHub Action that automatically prepends a new version section to `CHANGELOG.md` and commits it back to the branch. Follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format and pairs directly with the [draft-release](../draft-release/README.md) action — pass its `version` and `tag` outputs straight in.
+A composite GitHub Action that automatically prepends a new version section to `CHANGELOG.md` and commits it back to the branch. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. Designed to pair with [Release Drafter](https://github.com/release-drafter/release-drafter) — pass its `resolved_version` and `tag_name` outputs straight in.
 
 ## Features
 
 - Creates `CHANGELOG.md` from scratch if it doesn't exist (bootstrap-safe)
 - Fetches release notes from the GitHub draft release automatically — no manual copy-paste
-- Falls back to `git log` if the release has no notes yet
 - Prepends entries in newest-first order following [Keep a Changelog](https://keepachangelog.com) convention
 - Appends `[skip ci]` to the commit message to prevent recursive workflow runs
 - Idempotent — skips the commit if the changelog is already up to date
@@ -14,17 +13,15 @@ A composite GitHub Action that automatically prepends a new version section to `
 
 ## Usage
 
-### Paired with draft-release (recommended)
+### With Release Drafter (recommended)
+
+The simplest setup: copy [`.github/workflows/release-drafter.yml`](../.github/workflows/release-drafter.yml) to your repo. It calls this action automatically on every merge to `main`.
+
+To call the action directly from your own workflow:
 
 ```yaml
-name: Release
-
-on:
-  push:
-    branches: [ main ]
-
 jobs:
-  release:
+  changelog:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -33,18 +30,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Draft release
-        id: release
-        uses: hmcts/cnp-githubactions-library/draft-release@main
-        with:
-          github-token: ${{ github.token }}
-
       - name: Update changelog
         uses: hmcts/cnp-githubactions-library/update-changelog@main
         with:
           github-token: ${{ github.token }}
-          version: ${{ steps.release.outputs.version }}
-          tag: ${{ steps.release.outputs.tag }}
+          version: ${{ steps.drafter.outputs.resolved_version }}
+          tag: ${{ steps.drafter.outputs.tag_name }}
 ```
 
 ### With custom release notes
@@ -103,7 +94,7 @@ jobs:
 | `release-notes` | Custom notes body. Leave blank to auto-fetch from the draft release | No | _(auto-fetched)_ |
 | `git-user-name` | Git commit author name | No | `github-actions[bot]` |
 | `git-user-email` | Git commit author email | No | `github-actions[bot]@users.noreply.github.com` |
-| `commit-message` | Commit message template. Use `{version}` as a placeholder | No | `docs: update CHANGELOG for {version}` |
+| `commit-message` | Commit message template. Use `{version}` as a placeholder | No | `docs: update CHANGELOG for {version} [skip ci]` |
 
 ## Outputs
 
@@ -129,7 +120,7 @@ The action resolves notes in this priority order:
 
 1. **`release-notes` input** — if provided, used as-is
 2. **GitHub draft release body** — fetched via `gh release view <tag>` for the tag passed in
-3. **`git log` fallback** — commits since the previous tag, formatted as a bullet list
+3. **Empty string** — if neither source has content, an empty notes section is written
 
 ## Changelog Format
 

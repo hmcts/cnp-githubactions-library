@@ -1,8 +1,10 @@
-# Update Changelog Workflow
+# Update Changelog Reusable Workflow
 
-Automatically prepend a new version section to `CHANGELOG.md` and commit it back to the branch. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. Designed to run after the [draft-release workflow](./draft-release.md) — pass its outputs straight in.
+Reusable workflow wrapping the [`update-changelog`](../update-changelog/README.md) composite action. Call this from your consumer repo using `uses:` — no need to copy any action code.
 
-**Workflow File:** `workflows/update-changelog.yaml`
+Automatically prepends a new version section to `CHANGELOG.md`, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. Designed to pair with [Release Drafter](https://github.com/release-drafter/release-drafter) — pass its outputs straight in.
+
+**Workflow file:** `.github/workflows/update-changelog.yaml`
 
 ## Features
 
@@ -15,30 +17,30 @@ Automatically prepend a new version section to `CHANGELOG.md` and commit it back
 
 ## Example Usage
 
-### Combined with draft-release in one workflow
+### As part of a Release Drafter workflow
 
 ```yaml
-name: Release
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-    inputs:
-      bump-type:
-        type: choice
-        options: [ patch, minor, major ]
-        default: patch
-
 jobs:
   draft:
-    uses: hmcts/cnp-githubactions-library/workflows/draft-release.yaml@main
-    with:
-      bump-type: ${{ inputs.bump-type || 'patch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.drafter.outputs.resolved_version }}
+      tag:     ${{ steps.drafter.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: release-drafter/release-drafter@v6
+        id: drafter
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
   changelog:
     needs: draft
-    uses: hmcts/cnp-githubactions-library/workflows/update-changelog.yaml@main
+    if: needs.draft.outputs.version != ''
+    uses: hmcts/cnp-githubactions-library/.github/workflows/update-changelog.yaml@main
+    permissions:
+      contents: write
     with:
       version: ${{ needs.draft.outputs.version }}
       tag:     ${{ needs.draft.outputs.tag }}
@@ -78,7 +80,7 @@ jobs:
 | `release-notes` | Custom notes body. Leave blank to auto-fetch from the draft release | No | _(auto-fetched)_ |
 | `git-user-name` | Git commit author name | No | `github-actions[bot]` |
 | `git-user-email` | Git commit author email | No | `github-actions[bot]@users.noreply.github.com` |
-| `commit-message` | Commit message template (`{version}` is substituted) | No | `docs: update CHANGELOG for {version}` |
+| `commit-message` | Commit message template (`{version}` is substituted) | No | `docs: update CHANGELOG for {version} [skip ci]` |
 | `runner` | GitHub Actions runner to use | No | `ubuntu-latest` |
 | `github-token` | Override token. Use a PAT if you need the commit to trigger other workflows | No | `github.token` |
 
