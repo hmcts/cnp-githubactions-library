@@ -19,7 +19,58 @@ Copy [`.github/workflows/release-drafter.yml`](../.github/workflows/release-draf
 
 ### Step 2 — Copy the Release Drafter config
 
-Copy [`.github/release-drafter.yml`](../.github/release-drafter.yml) to your repo at `.github/release-drafter.yml`. This configures the label → version mapping and release note categories.
+Create `.github/release-drafter.yml` in your repo with the following content. This configures the label → version mapping and release note categories that Release Drafter uses to determine the next version and group PRs in the release body.
+
+```yaml
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+
+# Version bump rules — highest-priority label on any merged PR wins.
+version-resolver:
+  major:
+    labels:
+      - breaking-change
+  minor:
+    labels:
+      - enhancement
+  patch:
+    labels:
+      - bug
+      - dependencies
+      - documentation
+      - chore
+  default: patch
+
+# Release note sections — order controls order in the release body.
+categories:
+  - title: ':boom: Breaking Changes'
+    labels:
+      - breaking-change
+  - title: ':rocket: Features'
+    labels:
+      - enhancement
+  - title: ':bug: Bug Fixes'
+    labels:
+      - bug
+  - title: ':package: Dependency Updates'
+    labels:
+      - dependencies
+  - title: ':books: Documentation'
+    labels:
+      - documentation
+  - title: ':wrench: Maintenance'
+    labels:
+      - chore
+
+# PRs with this label are omitted from release notes entirely.
+exclude-labels:
+  - skip-changelog
+
+change-template: '- $TITLE @$AUTHOR (#$NUMBER)'
+change-title-escapes: '\<*_&'
+template: |
+  $CHANGES
+```
 
 ### Step 3 — Create required labels
 
