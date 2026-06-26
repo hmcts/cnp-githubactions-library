@@ -1,22 +1,5 @@
 name: PR Label Check
 
-# Reusable workflow that:
-#   1. Auto-applies a release label based on the PR title's conventional commit prefix.
-#   2. Validates that at least one recognised release label exists.
-#   3. Posts a helpful PR comment when the check fails.
-#
-# Usage — add this to .github/workflows/pr-label-check.yaml in your repo:
-#
-#   on:
-#     pull_request:
-#       types: [opened, edited, synchronize, labeled, unlabeled]
-#
-#   jobs:
-#     label-check:
-#       uses: hmcts/cnp-githubactions-library/.github/workflows/label-check.yaml@main
-#       permissions:
-#         pull-requests: write
-
 on:
   workflow_call:
 
