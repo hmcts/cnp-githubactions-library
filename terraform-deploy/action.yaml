@@ -94,7 +94,7 @@ runs:
         terraform_wrapper: false
 
     - name: Azure Login
-      uses: azure/login@v2
+      uses: azure/login@v3
       with:
         creds: ${{ inputs.azure-credentials }}
 
