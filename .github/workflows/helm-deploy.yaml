@@ -122,7 +122,7 @@ jobs:
     steps:
       - name: Checkout repository
         if: inputs.checkout-repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Determine OCI configuration
         id: oci-config
