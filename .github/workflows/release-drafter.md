@@ -11,13 +11,39 @@ On every push to `main` (and optionally on `workflow_dispatch`):
 1. **Draft job** — Release Drafter scans all merged PRs since the last published release tag, determines the next version from PR labels, and creates or updates a draft release in GitHub Releases
 2. **Changelog job** — Calls the `update-changelog` action to prepend the new version section to `CHANGELOG.md` and push a commit back to `main`
 
-## Setup
+### Step 1a - Grant Release Drafter Workflow GitHub App access to this repository
 
-### Step 1 — Copy the workflow
+- Go to https://github.com/organizations/hmcts/settings/apps/release-drafter-workflow
+- Under `Install App` click on the cog icon to edit the current settings.
+- Under `Repository Access` click `Select Repositories`, a drop down will appear where you can search and add your repository.
+- Click `Save` to re-install the app with access granted to your repository: the permissions will be:
+    - Read access to metadata (default) and Pull Requests
+    - Read and write access to code (needed in roder to write the changelog file to main branch)
+
+  ⚠️ You must be logged in as the Platform Operations HMCTS GitHub admin to perform these actions or ask one to do it for you.
+
+### Step 1b - Add Branch Rrotection or Ruleset bypass for the Release Drafter GitHub App
+
+If you have branch protection rule enable in your repository:
+
+- Go to `Settings` and click on `Branches` then click `edit` on your branch protection rule for the main branch
+- Tick to enable `Allow specific actors to bypass required pull requests`
+- Cick on the drop down and search then add `release-drafter-workflow`
+- Click `Save Changes`
+
+If you have Ruleset:
+
+- Go to `Settings` and click on `Rules` then `Rulesets` then select your main branch ruleset.
+- Under `Bypass List` click `Bypass List` and search for `Release Drafter Workflow` in the dropdown then add it with `Always Allow`
+- Click `Save Changes`
+
+  ⚠️ You must be an admin of the repository in order to be able to access these settings.
+
+### Step 2 — Copy the workflow
 
 Copy [`.github/workflows/release-drafter.yml`](../.github/workflows/release-drafter.yml) to your repo at `.github/workflows/release-drafter.yml`.
 
-### Step 2 — Copy the Release Drafter config
+### Step 3 — Copy the Release Drafter config
 
 Create `.github/release-drafter.yml` in your repo with the following content. This configures the label → version mapping and release note categories that Release Drafter uses to determine the next version and group PRs in the release body.
 
@@ -72,7 +98,7 @@ template: |
   $CHANGES
 ```
 
-### Step 3 — Create required labels
+### Step 4 — Create required labels
 
 ```bash
 gh label create "breaking-change" --color "#e11d48" --description "Introduces a breaking change" --repo owner/repo
@@ -80,7 +106,7 @@ gh label create "chore" --color "#6b7280" --description "Maintenance or refactor
 gh label create "skip-changelog" --color "#94a3b8" --description "Excluded from release notes" --repo owner/repo
 ```
 
-### Step 4 — Add PR label enforcement (recommended)
+### Step 5 — Add PR label enforcement (recommended)
 
 Add the [label-check workflow](./label-check.md) to ensure every PR has a label before it can be merged.
 
