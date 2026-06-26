@@ -76,7 +76,7 @@ jobs:
         # Pinned to @main — the library does not yet tag its own releases.
         # Once the library itself adopts draft-release (dogfooding), update this
         # to a pinned tag/SHA for reproducible behaviour.
-        uses: hmcts/cnp-githubactions-library/update-changelog@DTSPO-32755-add-new-action-for-releases
+        uses: hmcts/cnp-githubactions-library/update-changelog@main
         with:
           github-token:    ${{ inputs.github-token != '' && inputs.github-token || github.token }}
           version:         ${{ inputs.version }}

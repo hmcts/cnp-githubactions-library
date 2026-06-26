@@ -11,18 +11,18 @@ On every push to `main` (and optionally on `workflow_dispatch`):
 1. **Draft job** — Release Drafter scans all merged PRs since the last published release tag, determines the next version from PR labels, and creates or updates a draft release in GitHub Releases
 2. **Changelog job** — Calls the `update-changelog` action to prepend the new version section to `CHANGELOG.md` and push a commit back to `main`
 
-### Step 1a - Grant Release Drafter Workflow GitHub App access to this repository
+### Step 1a - Grant Release Drafter Workflow GitHub App access to your repository
 
 - Go to https://github.com/organizations/hmcts/settings/apps/release-drafter-workflow
 - Under `Install App` click on the cog icon to edit the current settings.
 - Under `Repository Access` click `Select Repositories`, a drop down will appear where you can search and add your repository.
-- Click `Save` to re-install the app with access granted to your repository: the permissions will be:
-    - Read access to metadata (default) and Pull Requests
-    - Read and write access to code (needed in roder to write the changelog file to main branch)
+- Click `Save` to re-install the app with access granted to your repository, the permissions will be:
+    - `Read access to metadata` (default) and `Pull Requests`
+    - `Read and write access to code` (this is needed in order to write the changelog file to main branch)
 
-  ⚠️ You must be logged in as the Platform Operations HMCTS GitHub admin to perform these actions or ask one to do it for you.
+  ⚠️ ***You must be logged in as the Platform Operations HMCTS GitHub admin to perform these actions or ask one to do it for you.***
 
-### Step 1b - Add Branch Rrotection or Ruleset bypass for the Release Drafter GitHub App
+### Step 1b - Add Branch Protection or Ruleset Bypass for the Release Drafter GitHub App
 
 If you have branch protection rule enable in your repository:
 
@@ -34,10 +34,10 @@ If you have branch protection rule enable in your repository:
 If you have Ruleset:
 
 - Go to `Settings` and click on `Rules` then `Rulesets` then select your main branch ruleset.
-- Under `Bypass List` click `Bypass List` and search for `Release Drafter Workflow` in the dropdown then add it with `Always Allow`
+- Click the `Bypass List` and search for `Release Drafter Workflow` in the dropdown then add it with `Always Allow`
 - Click `Save Changes`
 
-  ⚠️ You must be an admin of the repository in order to be able to access these settings.
+  ⚠️ ***You must be an admin of the repository in order to be able to access these settings.***
 
 ### Step 2 — Copy the workflow
 
