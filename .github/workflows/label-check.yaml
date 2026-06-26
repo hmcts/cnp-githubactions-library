@@ -1,0 +1,154 @@
+name: PR Label Check
+
+on:
+  workflow_call:
+
+jobs:
+  auto-label:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Apply label based on PR title prefix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          echo "PR title: $PR_TITLE"
+
+          case "$PR_TITLE" in
+            feat:*|feat\(*\):*)
+              LABEL="enhancement" ;;
+            fix:*|fix\(*\):*)
+              LABEL="bug" ;;
+            chore:*|chore\(*\):*)
+              LABEL="chore" ;;
+            docs:*|docs\(*\):*)
+              LABEL="documentation" ;;
+            deps:*|deps\(*\):*|build:*|build\(*\):*)
+              LABEL="dependencies" ;;
+            *)
+              echo "No conventional commit prefix found — no label applied"
+              exit 0 ;;
+          esac
+
+          echo "Applying label: $LABEL"
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$LABEL"
+
+  check-labels:
+    needs: auto-label
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Fetch current PR labels
+        id: labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          LABELS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '.labels[].name')
+          LABELS_JSON=$(echo "$LABELS" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          printf 'pr_labels=%s\n' "$LABELS_JSON" >> "$GITHUB_OUTPUT"
+          printf 'Labels: %s\n' "$LABELS_JSON"
+
+      - name: Check labels
+        env:
+          PR_LABELS: ${{ steps.labels.outputs.pr_labels }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          STANDARD_LABELS="breaking-change enhancement bug dependencies documentation chore"
+          ALLOWED="$STANDARD_LABELS"
+
+          # Check skip label first
+          if echo "$PR_LABELS" | grep -iq 'skip-changelog'; then
+            echo "✅ PR has skip label: skip-changelog — will be excluded from release notes"
+            exit 0
+          fi
+
+          FOUND_LABEL=""
+          for label in $ALLOWED; do
+            if echo "$PR_LABELS" | grep -iq "$label"; then
+              FOUND_LABEL="$label"
+              break
+            fi
+          done
+
+          # Check if title follows conventional commit format
+          VALID_TITLE=false
+          case "$PR_TITLE" in
+            feat:*|feat\(*\):*|\
+            fix:*|fix\(*\):*|\
+            chore:*|chore\(*\):*|\
+            docs:*|docs\(*\):*|\
+            deps:*|deps\(*\):*|\
+            build:*|build\(*\):*)
+              VALID_TITLE=true ;;
+          esac
+
+          post_comment() {
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$1"
+          }
+
+          if [ -z "$FOUND_LABEL" ]; then
+            if [ "$VALID_TITLE" = "false" ]; then
+              MSG="## ❌ PR Label Check Failed"$'\n\n'
+              MSG+="Your PR title does not follow the conventional commit format so a label could not be applied automatically."$'\n\n'
+              MSG+="### Update your PR title to one of these formats:"$'\n\n'
+              MSG+="| Prefix | Label applied | Version bump |"$'\n'
+              MSG+="|--------|--------------|--------------|"$'\n'
+              MSG+="| \`feat: description\` | enhancement | minor 1.0.0 → 1.1.0 |"$'\n'
+              MSG+="| \`fix: description\` | bug | patch 1.0.0 → 1.0.1 |"$'\n'
+              MSG+="| \`chore: description\` | chore | patch 1.0.0 → 1.0.1 |"$'\n'
+              MSG+="| \`docs: description\` | documentation | patch 1.0.0 → 1.0.1 |"$'\n'
+              MSG+="| \`deps: description\` | dependencies | patch 1.0.0 → 1.0.1 |"$'\n\n'
+              MSG+="**Examples:**"$'\n'
+              MSG+="- \`feat: add RBAC support for key vaults\`"$'\n'
+              MSG+="- \`fix: correct token expiry handling\`"$'\n'
+              MSG+="- \`chore: update terraform module version\`"$'\n\n'
+              MSG+="> ⚠️ **Breaking changes** cannot be auto-detected. Add the \`breaking-change\` label manually."$'\n\n'
+              MSG+="Once you update the title this check will re-run automatically."
+            else
+              MSG="## ❌ PR Label Check Failed"$'\n\n'
+              MSG+="Your title format is correct but no release label was found."$'\n\n'
+              MSG+="**Try pushing an empty commit to retrigger:**"$'\n\n'
+              MSG+='```'$'\n'
+              MSG+="git commit --allow-empty -m 'chore: retrigger checks'"$'\n'
+              MSG+="git push"$'\n'
+              MSG+='```'$'\n\n'
+              MSG+="Or manually add one of these labels to the PR:"$'\n\n'
+              MSG+="| Label | Version bump |"$'\n'
+              MSG+="|-------|-------------|"$'\n'
+              MSG+="| breaking-change | major 1.0.0 → 2.0.0 |"$'\n'
+              MSG+="| enhancement | minor 1.0.0 → 1.1.0 |"$'\n'
+              MSG+="| bug | patch 1.0.0 → 1.0.1 |"$'\n'
+              MSG+="| dependencies | patch |"$'\n'
+              MSG+="| documentation | patch |"$'\n'
+              MSG+="| chore | patch |"$'\n'
+              MSG+="| skip-changelog | excluded from release notes |"
+            fi
+            post_comment "$MSG"
+            exit 1
+          fi
+
+          echo "✅ PR has release label: '$FOUND_LABEL'"
+          case "$FOUND_LABEL" in
+            breaking-change)
+              echo "  → major version bump  (e.g. 1.2.3 → 2.0.0)"
+              ;;
+            enhancement)
+              echo "  → minor version bump  (e.g. 1.2.3 → 1.3.0)"
+              ;;
+            *)
+              echo "  → patch version bump  (e.g. 1.2.3 → 1.2.4)"
+              ;;
+          esac
