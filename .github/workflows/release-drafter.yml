@@ -16,12 +16,24 @@ jobs:
       version: ${{ steps.drafter.outputs.resolved_version }}
       tag:     ${{ steps.drafter.outputs.tag_name }}
     steps:
+      - name: Generate GitHub App token
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          # Global hmcts organization secrets for the Release Drafter GitHub App
+          # This app is only allowed access to specific repositories rather than global HMCTS org.
+          # So whenever implementing this action within a repository, please ensure that the access to the repository has been granted in the app settings.
+          app-id: ${{ secrets.RELEASE_DRAFTER_APP_ID }}
+          private-key: ${{ secrets.RELEASE_DRAFTER_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
 
       - uses: release-drafter/release-drafter@v6
         id: drafter
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
   changelog:
     needs: draft
@@ -30,12 +42,20 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Generate GitHub App token
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_DRAFTER_APP_ID }}
+          private-key: ${{ secrets.RELEASE_DRAFTER_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
 
       - uses: ./update-changelog
         with:
-          github-token: ${{ github.token }}
+          github-token: ${{ steps.app-token.outputs.token }}
           version: ${{ needs.draft.outputs.version }}
           tag:     ${{ needs.draft.outputs.tag }}
