@@ -34,6 +34,11 @@ on:
         required: false
         type: string
         default: ''
+      state-store-use-entra-id-auth:
+        description: 'Use Entra ID authentication for storage account access (default: false)'
+        required: false
+        type: boolean
+        default: false
       azure-client-id:
         description: 'Azure client ID for OIDC authentication'
         required: true
@@ -114,7 +119,7 @@ jobs:
 
       - name: Terraform Deploy
         id: deploy
-        uses: hmcts/cnp-githubactions-library/terraform-deploy-openid@main
+        uses: hmcts/cnp-githubactions-library/terraform-deploy-openid@feat/use-entra-id-auth-for-state
         with:
           environment: ${{ inputs.environment }}
           subscription: ${{ inputs.subscription }}
@@ -123,6 +128,7 @@ jobs:
           state-store-resource-group: ${{ inputs.state-store-resource-group }}
           state-store-account-name: ${{ inputs.state-store-account-name }}
           state-store-container-name: ${{ inputs.state-store-container-name }}
+          state-store-use-entra-id-auth: ${{ inputs.state-store-use-entra-id-auth }}
           azure-client-id: ${{ inputs.azure-client-id }}
           azure-tenant-id: ${{ inputs.azure-tenant-id }}
           azure-subscription-id: ${{ inputs.azure-subscription-id }}
