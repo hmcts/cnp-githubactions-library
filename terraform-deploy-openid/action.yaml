@@ -195,7 +195,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        ARM_ACCESS_KEY: ${{ steps.storage-key.outputs.key }}
+        ARM_ACCESS_KEY: ${{ inputs.state-store-use-entra-id-auth == 'false' && steps.storage-key.outputs.key || '' }}
         PRODUCT: ${{ steps.metadata.outputs.product }}
         TENANT_ID: ${{ steps.azure-context.outputs.tenant_id }}
         SP_OBJECT_ID: ${{ steps.azure-context.outputs.sp_object_id }}
@@ -312,7 +312,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        ARM_ACCESS_KEY: ${{ steps.storage-key.outputs.key }}
+        ARM_ACCESS_KEY: ${{ inputs.state-store-use-entra-id-auth == 'false' && steps.storage-key.outputs.key || '' }}
       run: terraform apply -auto-approve tfplan
 
     - name: Output Summary
