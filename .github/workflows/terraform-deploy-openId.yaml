@@ -119,7 +119,7 @@ jobs:
 
       - name: Terraform Deploy
         id: deploy
-        uses: hmcts/cnp-githubactions-library/terraform-deploy-openid@feat/use-entra-id-auth-for-state
+        uses: hmcts/cnp-githubactions-library/terraform-deploy-openid@main
         with:
           environment: ${{ inputs.environment }}
           subscription: ${{ inputs.subscription }}
