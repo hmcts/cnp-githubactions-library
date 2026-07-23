@@ -232,7 +232,8 @@ runs:
           -var "aks_subscription_id=${{ steps.aks-subscription.outputs.id }}" \
           -var "tenant_id=${TENANT_ID}" \
           -var "builtFrom=${GITHUB_REPOSITORY}" \
-          -var "ci_service_principal_object_id=${SP_OBJECT_ID}"
+          -var "ci_service_principal_object_id=${SP_OBJECT_ID}" \
+          -var-file=${{ inputs.environment }}.tfvars 
         EXITCODE=$?
         echo "exitcode=$EXITCODE" >> "$GITHUB_OUTPUT"
         if [ $EXITCODE -eq 1 ]; then
