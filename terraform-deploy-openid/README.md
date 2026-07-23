@@ -7,6 +7,7 @@ A composite GitHub Action that runs Terraform plan and optionally apply for infr
 - Full Terraform plan/apply workflow
 - Azure OIDC authentication (no secrets required)
 - Automatic backend configuration for HMCTS state storage
+- Optional Entra ID (OIDC) authentication for Terraform state storage (no access key lookup)
 - PR comment with plan output (idempotent updates)
 - Environment tag mapping for Azure policy compliance
 - Product name extraction from Helm Chart.yaml
@@ -35,6 +36,7 @@ jobs:
           subscription: DCD-CNP-DEV
           aks-subscription: DCD-CFTAPPS-STG
           storage-account: nonprod
+          state-store-use-entra-id-auth: 'true'
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           product: my-product
@@ -101,6 +103,10 @@ jobs:
 | `subscription` | Azure subscription name (e.g., DCD-CNP-DEV) | **Yes** | - |
 | `aks-subscription` | Azure subscription name for AKS cluster | **Yes** | - |
 | `storage-account` | Storage account postfix (nonprod, prod) | **Yes** | - |
+| `state-store-resource-group` | Override state store resource group name | No | `mgmt-state-store-{storage-account}` |
+| `state-store-account-name` | Override state store account name | No | `mgmtstatestore{storage-account}` |
+| `state-store-container-name` | Override state store container name | No | `mgmtstatestorecontainer{environment}` |
+| `state-store-use-entra-id-auth` | Use Entra ID auth for state storage instead of access key lookup | No | `false` |
 | `azure-client-id` | Azure client ID for OIDC authentication | **Yes** | - |
 | `azure-tenant-id` | Azure tenant ID for OIDC authentication | No | `531ff96d-0ae9-462a-8d2d-bec7c0b42082` |
 | `azure-subscription-id` | Azure subscription ID for OIDC authentication | **Yes** | - |
@@ -139,6 +145,11 @@ The action automatically configures the Azure storage backend using HMCTS naming
 | `resource_group_name` | `mgmt-state-store-{storage-account}` |
 | `container_name` | `mgmtstatestorecontainer{environment}` |
 | `key` | `{repository-name}/{environment}/terraform.tfstate` |
+
+State storage authentication mode:
+
+- `state-store-use-entra-id-auth: false` (default): retrieves and uses `ARM_ACCESS_KEY`
+- `state-store-use-entra-id-auth: true`: uses `use_azuread_auth=true` in backend init (no storage key retrieval)
 
 ## Environment Tag Mapping
 
@@ -185,6 +196,7 @@ The action passes the following variables to Terraform:
 - Azure service principal with federated credentials configured
 - Terraform state storage account configured
 - GitHub Actions OIDC provider configured in Azure AD
+- If `state-store-use-entra-id-auth` is enabled, grant the workload identity data-plane access to the state container (for example, Storage Blob Data Contributor)
 
 ## Notes
 

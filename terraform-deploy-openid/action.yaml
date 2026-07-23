@@ -27,6 +27,10 @@ inputs:
     description: 'Override container name for Terraform state (default: mgmtstatestorecontainer{environment})'
     required: false
     default: ''
+  state-store-use-entra-id-auth:
+    description: 'Use Entra ID authentication for storage account access (default: false)'
+    required: false
+    default: 'false'
   azure-client-id:
     description: 'Azure client ID for OIDC authentication'
     required: true
@@ -146,6 +150,7 @@ runs:
 
     - name: Get Storage Account Key
       id: storage-key
+      if: ${{ inputs.state-store-use-entra-id-auth == 'false' }}
       shell: bash
       run: |
         KEY=$(az storage account keys list \
@@ -155,8 +160,9 @@ runs:
         echo "::add-mask::$KEY"
         echo "key=$KEY" >> "$GITHUB_OUTPUT"
 
-    - name: Terraform Init
+    - name: Terraform Init (using Access Key)
       shell: bash
+      if: ${{ inputs.state-store-use-entra-id-auth == 'false' }}
       working-directory: ${{ inputs.working-directory }}
       env:
         ARM_ACCESS_KEY: ${{ steps.storage-key.outputs.key }}
@@ -166,6 +172,18 @@ runs:
           -backend-config="container_name=${{ steps.state-store.outputs.container-name }}" \
           -backend-config="resource_group_name=${{ steps.state-store.outputs.resource-group }}" \
           -backend-config="key=${{ github.event.repository.name }}/${{ inputs.environment }}/terraform.tfstate"
+
+    - name: Terraform Init (using Entra ID)
+      shell: bash
+      if: ${{ inputs.state-store-use-entra-id-auth == 'true' }}
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        terraform init -reconfigure \
+          -backend-config="storage_account_name=${{ steps.state-store.outputs.account-name }}" \
+          -backend-config="container_name=${{ steps.state-store.outputs.container-name }}" \
+          -backend-config="resource_group_name=${{ steps.state-store.outputs.resource-group }}" \
+          -backend-config="key=${{ github.event.repository.name }}/${{ inputs.environment }}/terraform.tfstate" \
+          -backend-config="use_azuread_auth=true"
 
     - name: Terraform Validate
       shell: bash
@@ -177,7 +195,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        ARM_ACCESS_KEY: ${{ steps.storage-key.outputs.key }}
+        ARM_ACCESS_KEY: ${{ inputs.state-store-use-entra-id-auth == 'false' && steps.storage-key.outputs.key || '' }}
         PRODUCT: ${{ steps.metadata.outputs.product }}
         TENANT_ID: ${{ steps.azure-context.outputs.tenant_id }}
         SP_OBJECT_ID: ${{ steps.azure-context.outputs.sp_object_id }}
@@ -214,7 +232,8 @@ runs:
           -var "aks_subscription_id=${{ steps.aks-subscription.outputs.id }}" \
           -var "tenant_id=${TENANT_ID}" \
           -var "builtFrom=${GITHUB_REPOSITORY}" \
-          -var "ci_service_principal_object_id=${SP_OBJECT_ID}"
+          -var "ci_service_principal_object_id=${SP_OBJECT_ID}" \
+          -var-file=${{ inputs.environment }}.tfvars 
         EXITCODE=$?
         echo "exitcode=$EXITCODE" >> "$GITHUB_OUTPUT"
         if [ $EXITCODE -eq 1 ]; then
@@ -293,7 +312,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        ARM_ACCESS_KEY: ${{ steps.storage-key.outputs.key }}
+        ARM_ACCESS_KEY: ${{ inputs.state-store-use-entra-id-auth == 'false' && steps.storage-key.outputs.key || '' }}
       run: terraform apply -auto-approve tfplan
 
     - name: Output Summary
