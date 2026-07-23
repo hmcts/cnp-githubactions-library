@@ -182,7 +182,7 @@ runs:
           -backend-config="storage_account_name=${{ steps.state-store.outputs.account-name }}" \
           -backend-config="container_name=${{ steps.state-store.outputs.container-name }}" \
           -backend-config="resource_group_name=${{ steps.state-store.outputs.resource-group }}" \
-          -backend-config="key=${{ github.event.repository.name }}/${{ inputs.environment }}/terraform.tfstate"
+          -backend-config="key=${{ github.event.repository.name }}/${{ inputs.environment }}/terraform.tfstate" \
           -backend-config="use_azuread_auth=true"
 
     - name: Terraform Validate
