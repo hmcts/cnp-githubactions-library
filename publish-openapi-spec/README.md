@@ -1,0 +1,178 @@
+# Publish OpenAPI Spec Action
+
+A composite GitHub Action that publishes an OpenAPI/Swagger spec to [`hmcts/cnp-api-docs`](https://github.com/hmcts/cnp-api-docs), the central HMCTS spec registry. Published specs are served at `https://hmcts.github.io/cnp-api-docs/specs/<api-name>.json` and rendered by the registry's Swagger UI.
+
+The action is language-agnostic: it takes a path to an already-generated JSON spec. How you produce that file — Gradle, a yarn script, `curl` against a running container — is up to the caller.
+
+> HMCTS also has [`hmcts/workflow-publish-openapi-spec`](https://github.com/hmcts/workflow-publish-openapi-spec), which is Java-only: it hardcodes `setup-java` and `./gradlew integration --tests <class>`. Use that one for Spring Boot services. Use this action for everything else.
+
+## Features
+
+- Validates the spec is present, non-empty, parseable JSON, and actually a spec before pushing — `cnp-api-docs` never parses `docs/specs/*.json` in its own CI, so an invalid spec would otherwise publish silently
+- Idempotent — no commit is made when the spec is byte-identical to what is already published
+- `dry-run` mode diffs without pushing, so pull requests can verify the spec builds
+- Supports the `<api-name>.<group>.json` convention for repos publishing several specs
+- Accepts both OpenAPI 3.x and Swagger 2.0
+- Outputs `published`, `spec-name`, and `spec-url` for downstream steps
+- Writes a job summary linking to the published spec
+
+## The publish token
+
+`SWAGGER_PUBLISHER_API_TOKEN` is an `hmcts` org-level secret, so every repo already has it — there is nothing to request or configure.
+
+You do still have to get it into the action's environment, because [GitHub withholds the `secrets` context from composite actions](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability):
+
+> The `secrets` context is not available for composite actions due to security reasons. If you want to pass a secret to a composite action, you need to do it explicitly as an input.
+
+So the action cannot read the secret itself, however ambient it is. Set it once as job-level `env` and every step — including this action — picks it up:
+
+```yaml
+jobs:
+  publish-spec:
+    runs-on: ubuntu-latest
+    env:
+      SWAGGER_PUBLISHER_API_TOKEN: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
+```
+
+The `api-token` input remains as an override for cases where the token comes from somewhere else (a different secret name, a GitHub App token minted earlier in the job). It takes precedence over the environment variable when both are set. The [reusable workflow](../.github/workflows/publish-openapi-spec.md) sets the `env` block for you, so its callers need only `secrets: inherit`.
+
+## Usage
+
+### Basic — spec committed to the repo
+
+```yaml
+jobs:
+  publish-spec:
+    runs-on: ubuntu-latest
+    env:
+      SWAGGER_PUBLISHER_API_TOKEN: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
+        with:
+          spec-path: docs/api/openapi.json
+```
+
+### Generating the spec first
+
+The action sets up no toolchain, deliberately — it publishes whatever file you point it at. Put your own setup and generation steps ahead of it in the same job.
+
+#### Node
+
+```yaml
+jobs:
+  publish-spec:
+    runs-on: ubuntu-latest
+    env:
+      SWAGGER_PUBLISHER_API_TOKEN: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - run: yarn install --immutable
+
+      - name: Generate spec
+        run: yarn openapi:json /tmp/openapi.json
+
+      - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
+        with:
+          spec-path: /tmp/openapi.json
+```
+
+#### Gradle
+
+```yaml
+jobs:
+  publish-spec:
+    runs-on: ubuntu-latest
+    env:
+      SWAGGER_PUBLISHER_API_TOKEN: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: gradle
+
+      - name: Generate spec
+        run: ./gradlew integration --tests uk.gov.hmcts.reform.myapp.OpenAPIPublisherTest
+
+      - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
+        with:
+          spec-path: /tmp/openapi-specs.json
+```
+
+#### Scraping a running service
+
+```yaml
+      - name: Start the service
+        run: docker compose up -d --wait
+
+      - name: Fetch the spec
+        run: curl -fsSL http://localhost:8080/v3/api-docs -o /tmp/openapi.json
+
+      - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
+        with:
+          spec-path: /tmp/openapi.json
+```
+
+### Dry run on pull requests
+
+Verifies the spec is valid and shows what would change, without touching the registry.
+
+```yaml
+      - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
+        with:
+          spec-path: /tmp/openapi.json
+          dry-run: ${{ github.event_name == 'pull_request' }}
+```
+
+### Publishing more than one spec from one repo
+
+```yaml
+      - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
+        with:
+          spec-path: /tmp/v2-external.json
+          group: v2_external          # -> docs/specs/<repo>.v2_external.json
+```
+
+## Inputs
+
+| Input | Description | Required | Default |
+|-------|-------------|----------|---------|
+| `spec-path` | Path to the generated spec file. Must be JSON — the registry does not render YAML. | Yes | |
+| `api-token` | Publish token, if `SWAGGER_PUBLISHER_API_TOKEN` is not already in the job env. Takes precedence when both are set. | No | (empty) |
+| `api-name` | Published filename, without extension. Must be unique across all HMCTS APIs. | No | calling repo name |
+| `group` | Group suffix for repos publishing several specs → `<api-name>.<group>.json` | No | (empty) |
+| `docs-repository` | Repository hosting the registry | No | `hmcts/cnp-api-docs` |
+| `docs-branch` | Branch to publish to. Pushed directly, with no pull request. | No | `master` |
+| `git-user-name` | Git commit author name | No | `HMCTS Platform Operations` |
+| `git-user-email` | Git commit author email | No | `github-platform-operations@HMCTS.NET` |
+| `dry-run` | Validate and diff but do not push | No | `false` |
+
+## Outputs
+
+| Output | Description |
+|--------|-------------|
+| `published` | `"true"` when a commit was pushed; `"false"` when the spec was unchanged or `dry-run` was set |
+| `spec-name` | Filename the spec was published as, without `.json` |
+| `spec-url` | Public URL the spec is served from |
+
+## Required setup
+
+1. **`SWAGGER_PUBLISHER_API_TOKEN`** — available at the `hmcts` org level, so a reusable-workflow caller can use `secrets: inherit`. No Platform Operations request needed.
+2. **A JSON spec.** If you author YAML, convert it before calling this action. The registry holds 183 specs and every one is JSON.
+3. **A registry entry** in [`docs/microservices.json`](https://github.com/hmcts/cnp-api-docs/blob/master/docs/microservices.json) if you want your API to appear in the network graph. That file is hand-edited via pull request; set `spec` to the published URL. Note that entries carrying a `urls` array will *not* render their spec — per the registry README, "If `urls` array is present spec will not be used".
+
+## Notes
+
+- **The push goes directly to `master` on a shared repository, with no pull-request gate.** That is the established HMCTS mechanism, shared by every publishing service, but it means the validation in this action is the only thing standing between a broken spec and the live registry. That is why the checks fail loudly rather than warning.
+- The commit message is `Update spec for <api-name>#<short-sha>`, using the first 7 characters of the SHA. Existing HMCTS publishers use `${GITHUB_SHA:7}`, which *strips* the leading 7 characters instead of taking them — hence the 33-character hashes throughout the registry's history (e.g. `Update spec for civil-service#02c23a28e30becca5aab38cfa851e50e2`). This action uses `${GITHUB_SHA:0:7}`.
+- The token is supplied through a git credential helper rather than embedded in the remote URL, so it cannot surface in error output or `git remote -v`.
+- `git pull --depth 1` keeps the clone shallow; the registry has a long history of spec commits.

@@ -1,0 +1,71 @@
+name: Publish OpenAPI spec
+
+on:
+  workflow_call:
+    inputs:
+      spec-path:
+        description: 'Path to the spec file to publish. Must be JSON — cnp-api-docs does not render YAML.'
+        required: true
+        type: string
+      generate-command:
+        description: 'Optional shell command that produces the spec at spec-path. Leave empty if the spec is committed to the repo. Any toolchain the command needs must be set up by the caller — use the composite action directly if you need setup steps.'
+        required: false
+        type: string
+        default: ''
+      api-name:
+        description: 'Name of the published spec, used as the filename. Defaults to the calling repository name. Must be unique across all HMCTS APIs.'
+        required: false
+        type: string
+        default: ''
+      group:
+        description: 'Optional group suffix for repos publishing more than one spec. Publishes to <api-name>.<group>.json.'
+        required: false
+        type: string
+        default: ''
+      dry-run:
+        description: 'Validate and diff the spec but do not push. Useful on pull requests.'
+        required: false
+        type: boolean
+        default: false
+      runner:
+        description: 'GitHub runner to use.'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      SWAGGER_PUBLISHER_API_TOKEN:
+        description: 'GitHub token with push access to hmcts/cnp-api-docs. Available at the hmcts org level, so `secrets: inherit` is enough.'
+        required: true
+    outputs:
+      published:
+        description: 'Whether a commit was pushed to cnp-api-docs.'
+        value: ${{ jobs.publish.outputs.published }}
+      spec-url:
+        description: 'Public URL the spec is served from.'
+        value: ${{ jobs.publish.outputs.spec-url }}
+
+jobs:
+  publish:
+    name: Publish OpenAPI spec
+    runs-on: ${{ inputs.runner }}
+    env:
+      SWAGGER_PUBLISHER_API_TOKEN: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+      spec-url: ${{ steps.publish.outputs.spec-url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate spec
+        if: inputs.generate-command != ''
+        shell: bash
+        run: ${{ inputs.generate-command }}
+
+      - name: Publish spec
+        id: publish
+        uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
+        with:
+          spec-path: ${{ inputs.spec-path }}
+          api-name: ${{ inputs.api-name }}
+          group: ${{ inputs.group }}
+          dry-run: ${{ inputs.dry-run }}

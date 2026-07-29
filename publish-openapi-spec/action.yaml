@@ -1,0 +1,187 @@
+name: 'Publish OpenAPI spec'
+description: 'Publish an OpenAPI/Swagger spec to hmcts/cnp-api-docs, where it is served at https://hmcts.github.io/cnp-api-docs/specs/<api-name>.json'
+author: 'HMCTS'
+
+inputs:
+  spec-path:
+    description: 'Path to the generated spec file to publish. Must be JSON — cnp-api-docs does not render YAML.'
+    required: true
+  api-token:
+    description: |
+      GitHub token with push access to hmcts/cnp-api-docs. Only needed if the
+      SWAGGER_PUBLISHER_API_TOKEN environment variable is not already set on the job —
+      GitHub does not expose the secrets context to composite actions, so the token has
+      to reach this action as either an env var or an input.
+    required: false
+    default: ''
+  api-name:
+    description: 'Name of the published spec, used as the filename. Defaults to the calling repository name. Must be unique across all HMCTS APIs.'
+    required: false
+    default: ''
+  group:
+    description: 'Optional group suffix for repos publishing more than one spec. Publishes to <api-name>.<group>.json.'
+    required: false
+    default: ''
+  docs-repository:
+    description: 'Repository hosting the spec registry.'
+    required: false
+    default: 'hmcts/cnp-api-docs'
+  docs-branch:
+    description: 'Branch to publish to. Note this pushes directly, with no pull request.'
+    required: false
+    default: 'master'
+  git-user-name:
+    description: 'Git commit author name.'
+    required: false
+    default: 'HMCTS Platform Operations'
+  git-user-email:
+    description: 'Git commit author email.'
+    required: false
+    default: 'github-platform-operations@HMCTS.NET'
+  dry-run:
+    description: 'Validate and diff the spec but do not push. Useful on pull requests.'
+    required: false
+    default: 'false'
+
+outputs:
+  published:
+    description: 'Whether a commit was pushed to the docs repository ("true" or "false"). False when the spec was unchanged or dry-run was set.'
+    value: ${{ steps.publish.outputs.published }}
+  spec-name:
+    description: 'Filename the spec was published as, without the .json extension.'
+    value: ${{ steps.publish.outputs.spec-name }}
+  spec-url:
+    description: 'Public URL the spec is served from.'
+    value: ${{ steps.publish.outputs.spec-url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate spec
+      shell: bash
+      env:
+        SPEC_PATH: ${{ inputs.spec-path }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f "$SPEC_PATH" ]; then
+          echo "::error::Spec file not found at '$SPEC_PATH'. Generate the spec before calling this action."
+          exit 1
+        fi
+
+        if [ ! -s "$SPEC_PATH" ]; then
+          echo "::error::Spec file '$SPEC_PATH' is empty."
+          exit 1
+        fi
+
+        # cnp-api-docs serves these files straight to Swagger UI and never parses
+        # them in its own CI, so a malformed spec would publish silently. Catch it here.
+        if ! jq empty "$SPEC_PATH" 2>/dev/null; then
+          echo "::error::Spec file '$SPEC_PATH' is not valid JSON. cnp-api-docs only renders JSON — convert YAML before publishing."
+          exit 1
+        fi
+
+        version="$(jq -r '.openapi // .swagger // empty' "$SPEC_PATH")"
+        if [ -z "$version" ]; then
+          echo "::error::'$SPEC_PATH' has no top-level \"openapi\" or \"swagger\" key, so it is not an API spec."
+          exit 1
+        fi
+
+        echo "Spec is valid JSON (version $version, $(jq '.paths | length' "$SPEC_PATH") paths)."
+
+    - name: Publish to spec registry
+      id: publish
+      shell: bash
+      env:
+        SPEC_PATH: ${{ inputs.spec-path }}
+        API_TOKEN_INPUT: ${{ inputs.api-token }}
+        API_NAME: ${{ inputs.api-name }}
+        GROUP: ${{ inputs.group }}
+        DOCS_REPOSITORY: ${{ inputs.docs-repository }}
+        DOCS_BRANCH: ${{ inputs.docs-branch }}
+        GIT_USER_NAME: ${{ inputs.git-user-name }}
+        GIT_USER_EMAIL: ${{ inputs.git-user-email }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        set -euo pipefail
+
+        api_name="$API_NAME"
+        if [ -z "$api_name" ]; then
+          api_name="${GITHUB_REPOSITORY#*/}"
+        fi
+        if [ -n "$GROUP" ]; then
+          api_name="${api_name}.${GROUP}"
+        fi
+
+        spec_url="https://hmcts.github.io/cnp-api-docs/specs/${api_name}.json"
+        {
+          echo "spec-name=${api_name}"
+          echo "spec-url=${spec_url}"
+        } >> "$GITHUB_OUTPUT"
+
+        # SWAGGER_PUBLISHER_API_TOKEN is an org-level secret, so it is usually already
+        # in the environment. GitHub withholds the secrets context from composite
+        # actions, so it cannot be read here directly — prefer the ambient env var and
+        # fall back to an explicit input.
+        API_TOKEN="${SWAGGER_PUBLISHER_API_TOKEN:-}"
+        if [ -n "$API_TOKEN_INPUT" ]; then
+          API_TOKEN="$API_TOKEN_INPUT"
+        fi
+
+        if [ -z "$API_TOKEN" ]; then
+          echo "::error::No publish token found. Set SWAGGER_PUBLISHER_API_TOKEN in the job's env (it is an hmcts org-level secret), or pass it via the api-token input."
+          exit 1
+        fi
+
+        # Copy the spec before changing directory — spec-path may be relative.
+        staged_spec="$(mktemp)"
+        trap 'rm -f "$staged_spec"' EXIT
+        cp "$SPEC_PATH" "$staged_spec"
+
+        staging_dir="$(mktemp -d)"
+        cd "$staging_dir"
+        git init --quiet
+        git config user.name "$GIT_USER_NAME"
+        git config user.email "$GIT_USER_EMAIL"
+        # Token is passed as the password half of the credential so it is not
+        # interpolated into a URL that could surface in error output.
+        git config credential.helper '!f() { echo "username=apitoken"; echo "password=${API_TOKEN}"; }; f'
+        git remote add upstream "https://github.com/${DOCS_REPOSITORY}.git"
+        git pull --quiet --depth 1 upstream "$DOCS_BRANCH"
+
+        target="docs/specs/${api_name}.json"
+        cp "$staged_spec" "$target"
+        git add "$target"
+
+        if git diff --cached --quiet; then
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          echo "Spec unchanged — nothing to publish."
+          echo "### OpenAPI spec unchanged" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${target}\` in \`${DOCS_REPOSITORY}\` already matches this build." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        echo "Changes to publish:"
+        git diff --cached --stat
+
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          echo "Dry run — not pushing."
+          {
+            echo "### OpenAPI spec would be published (dry run)"
+            echo ""
+            echo "Target: \`${target}\` on \`${DOCS_REPOSITORY}@${DOCS_BRANCH}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        git commit --quiet -m "Update spec for ${api_name}#${GITHUB_SHA:0:7}"
+        git push --quiet upstream "HEAD:${DOCS_BRANCH}"
+
+        echo "published=true" >> "$GITHUB_OUTPUT"
+        {
+          echo "### OpenAPI spec published"
+          echo ""
+          echo "- Spec: [\`${api_name}.json\`](${spec_url})"
+          echo "- Registry: \`${DOCS_REPOSITORY}@${DOCS_BRANCH}\`"
+        } >> "$GITHUB_STEP_SUMMARY"
