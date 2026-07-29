@@ -1,0 +1,108 @@
+name: Publish OpenAPI spec
+
+on:
+  workflow_call:
+    inputs:
+      spec-path:
+        description: 'Path to the generated spec file to publish. Must be JSON — cnp-api-docs does not render YAML.'
+        required: true
+        type: string
+      generate-command:
+        description: 'Command that produces the spec at spec-path. Leave empty if the spec is committed to the repo.'
+        required: false
+        type: string
+        default: ''
+      api-name:
+        description: 'Name of the published spec, used as the filename. Defaults to the calling repository name. Must be unique across all HMCTS APIs.'
+        required: false
+        type: string
+        default: ''
+      group:
+        description: 'Optional group suffix for repos publishing more than one spec. Publishes to <api-name>.<group>.json.'
+        required: false
+        type: string
+        default: ''
+      setup-node:
+        description: 'Whether to run actions/setup-node before the generate command. Set false for non-Node projects.'
+        required: false
+        type: boolean
+        default: true
+      node-version:
+        description: 'Node.js version (overridden by node-version-file if both are set).'
+        required: false
+        type: string
+        default: ''
+      node-version-file:
+        description: 'Path to a Node version file (e.g. .nvmrc).'
+        required: false
+        type: string
+        default: '.nvmrc'
+      install-command:
+        description: 'Command to install dependencies before generating the spec. Set to ":" to skip.'
+        required: false
+        type: string
+        default: 'yarn install --immutable'
+      dry-run:
+        description: 'Validate and diff the spec but do not push. Useful on pull requests.'
+        required: false
+        type: boolean
+        default: false
+      runner:
+        description: 'GitHub runner to use.'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      SWAGGER_PUBLISHER_API_TOKEN:
+        description: 'GitHub token with push access to hmcts/cnp-api-docs. Available at the hmcts org level, so `secrets: inherit` is enough.'
+        required: true
+    outputs:
+      published:
+        description: 'Whether a commit was pushed to cnp-api-docs.'
+        value: ${{ jobs.publish.outputs.published }}
+      spec-url:
+        description: 'Public URL the spec is served from.'
+        value: ${{ jobs.publish.outputs.spec-url }}
+
+jobs:
+  publish:
+    name: Publish OpenAPI spec
+    runs-on: ${{ inputs.runner }}
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+      spec-url: ${{ steps.publish.outputs.spec-url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable corepack
+        if: inputs.setup-node && inputs.generate-command != ''
+        shell: bash
+        run: corepack enable
+
+      - name: Set up Node
+        if: inputs.setup-node && inputs.generate-command != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          node-version-file: ${{ inputs.node-version-file }}
+          cache: 'yarn'
+
+      - name: Install dependencies
+        if: inputs.generate-command != '' && inputs.install-command != ':'
+        shell: bash
+        run: ${{ inputs.install-command }}
+
+      - name: Generate spec
+        if: inputs.generate-command != ''
+        shell: bash
+        run: ${{ inputs.generate-command }}
+
+      - name: Publish spec
+        id: publish
+        uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
+        with:
+          spec-path: ${{ inputs.spec-path }}
+          api-token: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
+          api-name: ${{ inputs.api-name }}
+          group: ${{ inputs.group }}
+          dry-run: ${{ inputs.dry-run }}

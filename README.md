@@ -12,6 +12,7 @@ A reusable library of GitHub Actions workflows for HMCTS CNP (Cloud Native Platf
   - [npm Publish Library](#npm-publish-library)
   - [Draft Release](#draft-release)
   - [Update Changelog](#update-changelog)
+  - [Publish OpenAPI Spec](#publish-openapi-spec)
 - [Usage](#usage)
 - [Contributing](#contributing)
 - [License](#license)
@@ -307,6 +308,57 @@ jobs:
 - Entries are prepended in newest-first order, following Keep a Changelog convention
 - Appends `[skip ci]` to the commit message to prevent recursive workflow runs
 - Outputs `changelog-path` and `committed` for downstream steps
+
+### Publish OpenAPI Spec
+
+Publish an OpenAPI/Swagger spec to [`hmcts/cnp-api-docs`](https://github.com/hmcts/cnp-api-docs), the central HMCTS spec registry, where it is served at `https://hmcts.github.io/cnp-api-docs/specs/<api-name>.json` and rendered by the registry's Swagger UI. Language-agnostic — it takes a path to a generated JSON spec, so it works with any toolchain.
+
+> For Spring Boot services, prefer [`hmcts/workflow-publish-openapi-spec`](https://github.com/hmcts/workflow-publish-openapi-spec), which emits the spec from a Gradle integration test. This action covers everything else.
+
+**Available in Two Formats:**
+
+#### 1. Reusable Workflow (Simple, Standardised)
+
+📖 **[View workflow documentation](.github/workflows/publish-openapi-spec.md)**
+
+```yaml
+jobs:
+  publish-openapi:
+    uses: hmcts/cnp-githubactions-library/.github/workflows/publish-openapi-spec.yaml@main
+    with:
+      generate-command: 'yarn openapi:json /tmp/openapi.json'
+      spec-path: /tmp/openapi.json
+    secrets: inherit
+```
+
+#### 2. Composite Action (Flexible, Extensible)
+
+📖 **[View action documentation](publish-openapi-spec/README.md)**
+
+```yaml
+jobs:
+  publish-spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate spec
+        run: ./gradlew generateOpenApiDocs
+
+      - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
+        with:
+          spec-path: build/openapi.json
+          api-token: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
+```
+
+**Features:**
+- Validates the spec is present, non-empty, valid JSON, and actually a spec before publishing — the registry never parses `docs/specs/*.json` in its own CI, so an invalid spec would otherwise publish silently
+- Idempotent: no commit when the spec is unchanged
+- `dry-run` mode diffs without pushing, so pull requests can verify the spec builds
+- Supports the `<api-name>.<group>.json` convention for repos publishing several specs
+- Accepts OpenAPI 3.x and Swagger 2.0
+- Uses the org-level `SWAGGER_PUBLISHER_API_TOKEN`, so `secrets: inherit` is enough
+- Outputs `published`, `spec-name`, and `spec-url`
 
 ## 📖 Usage
 
