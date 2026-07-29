@@ -16,6 +16,26 @@ The action is language-agnostic: it takes a path to an already-generated JSON sp
 - Outputs `published`, `spec-name`, and `spec-url` for downstream steps
 - Writes a job summary linking to the published spec
 
+## The publish token
+
+`SWAGGER_PUBLISHER_API_TOKEN` is an `hmcts` org-level secret, so every repo already has it — there is nothing to request or configure.
+
+You do still have to get it into the action's environment, because [GitHub withholds the `secrets` context from composite actions](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability):
+
+> The `secrets` context is not available for composite actions due to security reasons. If you want to pass a secret to a composite action, you need to do it explicitly as an input.
+
+So the action cannot read the secret itself, however ambient it is. Set it once as job-level `env` and every step — including this action — picks it up:
+
+```yaml
+jobs:
+  publish-spec:
+    runs-on: ubuntu-latest
+    env:
+      SWAGGER_PUBLISHER_API_TOKEN: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
+```
+
+The `api-token` input remains as an override for cases where the token comes from somewhere else (a different secret name, a GitHub App token minted earlier in the job). It takes precedence over the environment variable when both are set. The [reusable workflow](../.github/workflows/publish-openapi-spec.md) sets the `env` block for you, so its callers need only `secrets: inherit`.
+
 ## Usage
 
 ### Basic — spec committed to the repo
@@ -24,13 +44,14 @@ The action is language-agnostic: it takes a path to an already-generated JSON sp
 jobs:
   publish-spec:
     runs-on: ubuntu-latest
+    env:
+      SWAGGER_PUBLISHER_API_TOKEN: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
         with:
           spec-path: docs/api/openapi.json
-          api-token: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
 ```
 
 ### Generating the spec first
@@ -43,6 +64,8 @@ The action sets up no toolchain, deliberately — it publishes whatever file you
 jobs:
   publish-spec:
     runs-on: ubuntu-latest
+    env:
+      SWAGGER_PUBLISHER_API_TOKEN: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,7 +81,6 @@ jobs:
       - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
         with:
           spec-path: /tmp/openapi.json
-          api-token: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
 ```
 
 #### Gradle
@@ -67,6 +89,8 @@ jobs:
 jobs:
   publish-spec:
     runs-on: ubuntu-latest
+    env:
+      SWAGGER_PUBLISHER_API_TOKEN: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -82,7 +106,6 @@ jobs:
       - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
         with:
           spec-path: /tmp/openapi-specs.json
-          api-token: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
 ```
 
 #### Scraping a running service
@@ -97,7 +120,6 @@ jobs:
       - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
         with:
           spec-path: /tmp/openapi.json
-          api-token: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
 ```
 
 ### Dry run on pull requests
@@ -108,7 +130,6 @@ Verifies the spec is valid and shows what would change, without touching the reg
       - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
         with:
           spec-path: /tmp/openapi.json
-          api-token: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
           dry-run: ${{ github.event_name == 'pull_request' }}
 ```
 
@@ -118,7 +139,6 @@ Verifies the spec is valid and shows what would change, without touching the reg
       - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
         with:
           spec-path: /tmp/v2-external.json
-          api-token: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
           group: v2_external          # -> docs/specs/<repo>.v2_external.json
 ```
 
@@ -127,7 +147,7 @@ Verifies the spec is valid and shows what would change, without touching the reg
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `spec-path` | Path to the generated spec file. Must be JSON — the registry does not render YAML. | Yes | |
-| `api-token` | GitHub token with push access to `hmcts/cnp-api-docs`. The org-level `SWAGGER_PUBLISHER_API_TOKEN`. | Yes | |
+| `api-token` | Publish token, if `SWAGGER_PUBLISHER_API_TOKEN` is not already in the job env. Takes precedence when both are set. | No | (empty) |
 | `api-name` | Published filename, without extension. Must be unique across all HMCTS APIs. | No | calling repo name |
 | `group` | Group suffix for repos publishing several specs → `<api-name>.<group>.json` | No | (empty) |
 | `docs-repository` | Repository hosting the registry | No | `hmcts/cnp-api-docs` |

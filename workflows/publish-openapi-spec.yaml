@@ -48,6 +48,8 @@ jobs:
   publish:
     name: Publish OpenAPI spec
     runs-on: ${{ inputs.runner }}
+    env:
+      SWAGGER_PUBLISHER_API_TOKEN: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
     outputs:
       published: ${{ steps.publish.outputs.published }}
       spec-url: ${{ steps.publish.outputs.spec-url }}
@@ -64,7 +66,6 @@ jobs:
         uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
         with:
           spec-path: ${{ inputs.spec-path }}
-          api-token: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
           api-name: ${{ inputs.api-name }}
           group: ${{ inputs.group }}
           dry-run: ${{ inputs.dry-run }}

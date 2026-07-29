@@ -110,7 +110,9 @@ jobs:
 |--------|-------------|----------|
 | `SWAGGER_PUBLISHER_API_TOKEN` | GitHub token with push access to `hmcts/cnp-api-docs` | Yes |
 
-Available at the `hmcts` org level, so `secrets: inherit` is sufficient.
+Available at the `hmcts` org level, so `secrets: inherit` is sufficient — there is nothing to request or configure.
+
+This workflow sets the token as job-level `env` before invoking the underlying action, because GitHub does not expose the `secrets` context to composite actions. Callers pass no token of any kind.
 
 ## Outputs
 

@@ -344,6 +344,8 @@ Use when generating the spec needs a toolchain — put your own setup steps ahea
 jobs:
   publish-spec:
     runs-on: ubuntu-latest
+    env:
+      SWAGGER_PUBLISHER_API_TOKEN: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -358,7 +360,6 @@ jobs:
       - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
         with:
           spec-path: build/openapi.json
-          api-token: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
 ```
 
 **Features:**
@@ -368,7 +369,7 @@ jobs:
 - `dry-run` mode diffs without pushing, so pull requests can verify the spec builds
 - Supports the `<api-name>.<group>.json` convention for repos publishing several specs
 - Accepts OpenAPI 3.x and Swagger 2.0
-- Uses the org-level `SWAGGER_PUBLISHER_API_TOKEN`, so `secrets: inherit` is enough
+- Uses the org-level `SWAGGER_PUBLISHER_API_TOKEN`, so `secrets: inherit` is enough for the reusable workflow, and a one-line job `env` for the action (GitHub does not expose the `secrets` context to composite actions)
 - Outputs `published`, `spec-name`, and `spec-url`
 
 ## 📖 Usage
