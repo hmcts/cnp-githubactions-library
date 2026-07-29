@@ -4,11 +4,11 @@ on:
   workflow_call:
     inputs:
       spec-path:
-        description: 'Path to the generated spec file to publish. Must be JSON — cnp-api-docs does not render YAML.'
+        description: 'Path to the spec file to publish. Must be JSON — cnp-api-docs does not render YAML.'
         required: true
         type: string
       generate-command:
-        description: 'Command that produces the spec at spec-path. Leave empty if the spec is committed to the repo.'
+        description: 'Optional shell command that produces the spec at spec-path. Leave empty if the spec is committed to the repo. Any toolchain the command needs must be set up by the caller — use the composite action directly if you need setup steps.'
         required: false
         type: string
         default: ''
@@ -22,26 +22,6 @@ on:
         required: false
         type: string
         default: ''
-      setup-node:
-        description: 'Whether to run actions/setup-node before the generate command. Set false for non-Node projects.'
-        required: false
-        type: boolean
-        default: true
-      node-version:
-        description: 'Node.js version (overridden by node-version-file if both are set).'
-        required: false
-        type: string
-        default: ''
-      node-version-file:
-        description: 'Path to a Node version file (e.g. .nvmrc).'
-        required: false
-        type: string
-        default: '.nvmrc'
-      install-command:
-        description: 'Command to install dependencies before generating the spec. Set to ":" to skip.'
-        required: false
-        type: string
-        default: 'yarn install --immutable'
       dry-run:
         description: 'Validate and diff the spec but do not push. Useful on pull requests.'
         required: false
@@ -73,24 +53,6 @@ jobs:
       spec-url: ${{ steps.publish.outputs.spec-url }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Enable corepack
-        if: inputs.setup-node && inputs.generate-command != ''
-        shell: bash
-        run: corepack enable
-
-      - name: Set up Node
-        if: inputs.setup-node && inputs.generate-command != ''
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ inputs.node-version }}
-          node-version-file: ${{ inputs.node-version-file }}
-          cache: 'yarn'
-
-      - name: Install dependencies
-        if: inputs.generate-command != '' && inputs.install-command != ':'
-        shell: bash
-        run: ${{ inputs.install-command }}
 
       - name: Generate spec
         if: inputs.generate-command != ''

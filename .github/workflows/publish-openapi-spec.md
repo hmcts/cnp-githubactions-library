@@ -1,12 +1,14 @@
 # Publish OpenAPI Spec Workflow
 
-Generate an OpenAPI/Swagger spec and publish it to [`hmcts/cnp-api-docs`](https://github.com/hmcts/cnp-api-docs), the central HMCTS spec registry. Published specs are served at `https://hmcts.github.io/cnp-api-docs/specs/<api-name>.json`.
+Publish an OpenAPI/Swagger spec to [`hmcts/cnp-api-docs`](https://github.com/hmcts/cnp-api-docs), the central HMCTS spec registry. Published specs are served at `https://hmcts.github.io/cnp-api-docs/specs/<api-name>.json`.
 
 **Workflow file:** `.github/workflows/publish-openapi-spec.yaml`
 
-> **💡 Need more flexibility?** This reusable workflow suits a stand-alone publish job. If you need the publish to share a job with other steps — or you generate the spec in a way this workflow's Node-oriented defaults don't cover — use the [composite action](../../publish-openapi-spec/README.md) instead.
+Language-agnostic: it publishes whatever JSON file you point it at. It sets up no toolchain, so it suits repos where the spec is committed, or where generating it needs nothing beyond what the runner already provides.
 
-> For Spring Boot services, prefer [`hmcts/workflow-publish-openapi-spec`](https://github.com/hmcts/workflow-publish-openapi-spec), which runs a Gradle integration test to emit the spec. This workflow exists for everything else.
+> **💡 Need a toolchain?** If generating your spec requires Node, Java, Python, or Docker, this workflow cannot set that up — it deliberately has no language-specific inputs. Use the [composite action](../../publish-openapi-spec/README.md) inside your own job, where you control the setup steps.
+
+> For Spring Boot services, [`hmcts/workflow-publish-openapi-spec`](https://github.com/hmcts/workflow-publish-openapi-spec) runs a Gradle integration test to emit the spec and may be a closer fit.
 
 ## Features
 
@@ -20,33 +22,19 @@ Generate an OpenAPI/Swagger spec and publish it to [`hmcts/cnp-api-docs`](https:
 
 **Use this reusable workflow when:**
 
-- You want "publish the spec on push to master" with minimal boilerplate
-- The publish lives in its own job
-- You generate the spec with a Node toolchain (or the spec is already committed)
+- The spec is committed to your repo, or generating it needs no toolchain setup
+- The publish can live in its own job
+- You want minimal boilerplate
 
 **Use the [composite action](../../publish-openapi-spec/README.md) when:**
 
-- The publish needs to share a job with other steps
+- Generating the spec needs a toolchain (Node, Java, Python, Docker) — the action sits in your job, after your own setup steps
+- The publish needs to share a job with other work
 - You need `published` / `spec-url` outputs mid-job
-- Your spec generation needs a toolchain this workflow doesn't set up (Java, Python, Docker Compose)
 
 ## Example Usage
 
-### Node service, spec generated at publish time
-
-```yaml
-jobs:
-  publish-openapi:
-    uses: hmcts/cnp-githubactions-library/.github/workflows/publish-openapi-spec.yaml@main
-    with:
-      generate-command: 'yarn openapi:json /tmp/openapi.json'
-      spec-path: /tmp/openapi.json
-    secrets: inherit
-```
-
 ### Spec committed to the repo
-
-No generation, no Node setup.
 
 ```yaml
 jobs:
@@ -54,9 +42,26 @@ jobs:
     uses: hmcts/cnp-githubactions-library/.github/workflows/publish-openapi-spec.yaml@main
     with:
       spec-path: docs/api/openapi.json
-      setup-node: false
     secrets: inherit
 ```
+
+### Generating with a self-contained command
+
+`generate-command` runs on a bare runner immediately after checkout. It works when the command needs nothing installed first — here, converting committed YAML to JSON with a container:
+
+```yaml
+jobs:
+  publish-openapi:
+    uses: hmcts/cnp-githubactions-library/.github/workflows/publish-openapi-spec.yaml@main
+    with:
+      generate-command: >-
+        docker run --rm -v ${{ github.workspace }}:/w mikefarah/yq
+        -o=json '.' /w/docs/api/openapi.yaml > /tmp/openapi.json
+      spec-path: /tmp/openapi.json
+    secrets: inherit
+```
+
+If your generation step needs `yarn install`, `./gradlew`, or `pip install` first, use the composite action instead — see [its README](../../publish-openapi-spec/README.md) for Node and Gradle examples.
 
 ### Dry run on pull requests, real publish on master
 
@@ -65,8 +70,7 @@ jobs:
   publish-openapi:
     uses: hmcts/cnp-githubactions-library/.github/workflows/publish-openapi-spec.yaml@main
     with:
-      generate-command: 'yarn openapi:json /tmp/openapi.json'
-      spec-path: /tmp/openapi.json
+      spec-path: docs/api/openapi.json
       dry-run: ${{ github.event_name == 'pull_request' }}
     secrets: inherit
 ```
@@ -78,8 +82,7 @@ jobs:
   publish-openapi:
     uses: hmcts/cnp-githubactions-library/.github/workflows/publish-openapi-spec.yaml@main
     with:
-      generate-command: 'yarn openapi:json /tmp/openapi.json'
-      spec-path: /tmp/openapi.json
+      spec-path: docs/api/openapi.json
     secrets: inherit
 
   notify:
@@ -95,17 +98,11 @@ jobs:
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `spec-path` | Path to the spec file to publish. Must be JSON. | Yes | |
-| `generate-command` | Command producing the spec at `spec-path`. Leave empty if committed. | No | (empty) |
+| `generate-command` | Shell command producing the spec at `spec-path`, run on a bare runner after checkout. Leave empty if committed. | No | (empty) |
 | `api-name` | Published filename without extension. Must be unique across HMCTS. | No | calling repo name |
 | `group` | Group suffix → `<api-name>.<group>.json` | No | (empty) |
-| `setup-node` | Run `actions/setup-node` before generating | No | `true` |
-| `node-version` | Node version (overridden by `node-version-file`) | No | (empty) |
-| `node-version-file` | Path to a Node version file | No | `.nvmrc` |
-| `install-command` | Dependency install command. Set to `":"` to skip. | No | `yarn install --immutable` |
 | `dry-run` | Validate and diff but do not push | No | `false` |
 | `runner` | GitHub runner to use | No | `ubuntu-latest` |
-
-Node setup and install only run when `generate-command` is set — publishing a committed spec needs neither.
 
 ## Secrets
 

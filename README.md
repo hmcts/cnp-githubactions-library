@@ -317,7 +317,11 @@ Publish an OpenAPI/Swagger spec to [`hmcts/cnp-api-docs`](https://github.com/hmc
 
 **Available in Two Formats:**
 
+Neither format sets up a toolchain, so generating the spec is the caller's business.
+
 #### 1. Reusable Workflow (Simple, Standardised)
+
+For a committed spec, or generation that needs nothing installed first.
 
 📖 **[View workflow documentation](.github/workflows/publish-openapi-spec.md)**
 
@@ -326,12 +330,13 @@ jobs:
   publish-openapi:
     uses: hmcts/cnp-githubactions-library/.github/workflows/publish-openapi-spec.yaml@main
     with:
-      generate-command: 'yarn openapi:json /tmp/openapi.json'
-      spec-path: /tmp/openapi.json
+      spec-path: docs/api/openapi.json
     secrets: inherit
 ```
 
 #### 2. Composite Action (Flexible, Extensible)
+
+Use when generating the spec needs a toolchain — put your own setup steps ahead of it.
 
 📖 **[View action documentation](publish-openapi-spec/README.md)**
 
@@ -341,6 +346,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
 
       - name: Generate spec
         run: ./gradlew generateOpenApiDocs
@@ -352,6 +362,7 @@ jobs:
 ```
 
 **Features:**
+- No language-specific inputs — works with Gradle, yarn, pip, `curl` against a running container, or a committed spec
 - Validates the spec is present, non-empty, valid JSON, and actually a spec before publishing — the registry never parses `docs/specs/*.json` in its own CI, so an invalid spec would otherwise publish silently
 - Idempotent: no commit when the spec is unchanged
 - `dry-run` mode diffs without pushing, so pull requests can verify the spec builds

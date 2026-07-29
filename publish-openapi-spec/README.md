@@ -35,6 +35,10 @@ jobs:
 
 ### Generating the spec first
 
+The action sets up no toolchain, deliberately — it publishes whatever file you point it at. Put your own setup and generation steps ahead of it in the same job.
+
+#### Node
+
 ```yaml
 jobs:
   publish-spec:
@@ -50,6 +54,45 @@ jobs:
 
       - name: Generate spec
         run: yarn openapi:json /tmp/openapi.json
+
+      - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
+        with:
+          spec-path: /tmp/openapi.json
+          api-token: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
+```
+
+#### Gradle
+
+```yaml
+jobs:
+  publish-spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: gradle
+
+      - name: Generate spec
+        run: ./gradlew integration --tests uk.gov.hmcts.reform.myapp.OpenAPIPublisherTest
+
+      - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
+        with:
+          spec-path: /tmp/openapi-specs.json
+          api-token: ${{ secrets.SWAGGER_PUBLISHER_API_TOKEN }}
+```
+
+#### Scraping a running service
+
+```yaml
+      - name: Start the service
+        run: docker compose up -d --wait
+
+      - name: Fetch the spec
+        run: curl -fsSL http://localhost:8080/v3/api-docs -o /tmp/openapi.json
 
       - uses: hmcts/cnp-githubactions-library/publish-openapi-spec@main
         with:
