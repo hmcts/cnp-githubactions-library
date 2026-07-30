@@ -123,9 +123,11 @@ runs:
         # in the environment. GitHub withholds the secrets context from composite
         # actions, so it cannot be read here directly — prefer the ambient env var and
         # fall back to an explicit input.
-        API_TOKEN="${SWAGGER_PUBLISHER_API_TOKEN:-}"
+        # Exported because git runs the credential helper below in its own shell,
+        # which would not otherwise inherit it.
+        export API_TOKEN="${SWAGGER_PUBLISHER_API_TOKEN:-}"
         if [ -n "$API_TOKEN_INPUT" ]; then
-          API_TOKEN="$API_TOKEN_INPUT"
+          export API_TOKEN="$API_TOKEN_INPUT"
         fi
 
         if [ -z "$API_TOKEN" ]; then
