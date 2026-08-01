@@ -92,7 +92,7 @@ runs:
         allow-no-subscriptions: true
 
     - name: Get AKS Credentials
-      uses: azure/aks-set-context@v4
+      uses: azure/aks-set-context@v5
       with:
         resource-group: ${{ inputs.environment }}-rg
         cluster-name: ${{ inputs.environment }}-aks
