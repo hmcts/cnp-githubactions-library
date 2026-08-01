@@ -54,7 +54,7 @@ jobs:
       published: ${{ steps.publish.outputs.published }}
       spec-url: ${{ steps.publish.outputs.spec-url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Generate spec
         if: inputs.generate-command != ''
