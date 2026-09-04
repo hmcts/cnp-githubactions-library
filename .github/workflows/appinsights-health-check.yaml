@@ -1,0 +1,126 @@
+name: Application Insights health check
+
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        description: 'Path to the check configuration file in the calling repository.'
+        required: false
+        type: string
+        default: '.github/watchdog.yml'
+      app-id:
+        description: 'Application Insights app ID (the GUID, not the resource name). Overrides the config file.'
+        required: false
+        type: string
+        default: ''
+      window:
+        description: 'Evaluation window, substituted into queries as {{window}}.'
+        required: false
+        type: string
+        default: '15m'
+      baseline-window:
+        description: 'Comparison window for regression checks, substituted as {{baseline}}.'
+        required: false
+        type: string
+        default: '7d'
+      max-findings:
+        description: 'Cap on fresh findings emitted per run. The remainder is counted, not dropped.'
+        required: false
+        type: number
+        default: 3
+      renotify-after:
+        description: 'How long a reported finding stays suppressed, e.g. 6h.'
+        required: false
+        type: string
+        default: ''
+      runner:
+        description: 'GitHub runner to use.'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      AZURE_CLIENT_ID:
+        description: 'Client ID of the app registration used for OIDC. Needs Monitoring Reader on the Application Insights resource.'
+        required: true
+      AZURE_TENANT_ID:
+        description: 'Azure tenant ID.'
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        description: 'Subscription containing the Application Insights resource.'
+        required: true
+    outputs:
+      breached:
+        description: 'Whether any check produced a fresh finding.'
+        value: ${{ jobs.check.outputs.breached }}
+      findings:
+        description: 'Fresh findings as a JSON array.'
+        value: ${{ jobs.check.outputs.findings }}
+      deferred-count:
+        description: 'Fresh findings that exceeded max-findings.'
+        value: ${{ jobs.check.outputs.deferred-count }}
+      resolved:
+        description: 'Fingerprints that were firing and are now clean.'
+        value: ${{ jobs.check.outputs.resolved }}
+
+jobs:
+  check:
+    name: Health check
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      breached: ${{ steps.check.outputs.breached }}
+      findings: ${{ steps.check.outputs.findings }}
+      deferred-count: ${{ steps.check.outputs.deferred-count }}
+      resolved: ${{ steps.check.outputs.resolved }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Deduplication is only meaningful if state survives between runs. Restored on a
+      # prefix match because the exact key is per-run, which is what makes the save
+      # below succeed every time rather than colliding with an existing entry.
+      - name: Restore watchdog state
+        uses: actions/cache/restore@v4
+        with:
+          path: .watchdog-state.json
+          key: watchdog-state-${{ inputs.app-id }}-${{ github.run_id }}
+          restore-keys: |
+            watchdog-state-${{ inputs.app-id }}-
+            watchdog-state-
+
+      - name: Run health checks
+        id: check
+        uses: hmcts/cnp-githubactions-library/appinsights-health-check@main
+        with:
+          config-path: ${{ inputs.config-path }}
+          app-id: ${{ inputs.app-id }}
+          window: ${{ inputs.window }}
+          baseline-window: ${{ inputs.baseline-window }}
+          max-findings: ${{ inputs.max-findings }}
+          renotify-after: ${{ inputs.renotify-after }}
+
+      # always(): a failed check run must not lose the state, or the next run
+      # re-reports everything it already reported.
+      - name: Save watchdog state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .watchdog-state.json
+          key: watchdog-state-${{ inputs.app-id }}-${{ github.run_id }}
+
+      - name: Upload the verdict artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appinsights-health-check-findings
+          path: ${{ steps.check.outputs.findings-path }}
+          if-no-files-found: ignore
+          retention-days: 14

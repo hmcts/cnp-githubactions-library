@@ -1,0 +1,204 @@
+name: 'Slack Notify'
+description: 'Post a message to Slack via a bot token or an incoming webhook, optionally resolving GitHub logins to Slack mentions'
+author: 'HMCTS'
+
+inputs:
+  channel:
+    description: 'Channel to post to — an ID (C0123456789) or a name (#my-channel). Required when using a bot token; ignored by webhooks, which are bound to a channel already.'
+    required: false
+    default: ''
+  text:
+    description: 'Message text, in Slack mrkdwn. Used as the notification fallback when blocks are supplied.'
+    required: false
+    default: ''
+  blocks:
+    description: 'Block Kit blocks as a JSON array. Takes precedence over text for rendering; supply text as well so notifications and screen readers have something to read.'
+    required: false
+    default: ''
+  bot-token:
+    description: |
+      Slack bot token (xoxb-...) with chat:write. Only needed if the SLACK_BOT_TOKEN
+      environment variable is not already set on the job — GitHub does not expose the
+      secrets context to composite actions, so the token has to reach this action as
+      either an env var or an input.
+    required: false
+    default: ''
+  webhook-url:
+    description: |
+      Slack incoming webhook URL, used when no bot token is available. Falls back to the
+      SLACK_WEBHOOK_URL environment variable. Webhooks cannot thread, cannot return a
+      message timestamp, and post only to the channel they were created for.
+    required: false
+    default: ''
+  thread-ts:
+    description: 'Timestamp of a parent message to reply to, threading this message beneath it. Bot token only.'
+    required: false
+    default: ''
+  mention-github-users:
+    description: 'Space or comma separated GitHub logins to mention. Resolved to Slack IDs via hmcts/github-slack-user-mappings; unmapped logins fall back to a plain @login.'
+    required: false
+    default: ''
+  username:
+    description: 'Override the display name of the posting bot.'
+    required: false
+    default: ''
+  icon-emoji:
+    description: 'Override the bot icon, e.g. :warning:.'
+    required: false
+    default: ''
+  fail-on-error:
+    description: |
+      Fail the step when Slack cannot be reached or rejects the message. Defaults to
+      false: a notification is usually reporting on something more important than
+      itself, and a Slack outage should not turn that run red or mask the real result.
+      The failure is always logged as a warning either way.
+    required: false
+    default: 'false'
+
+outputs:
+  delivered:
+    description: 'Whether Slack accepted the message ("true" or "false").'
+    value: ${{ steps.post.outputs.delivered }}
+  ts:
+    description: 'Timestamp of the posted message, for threading replies onto it later. Empty when posting via a webhook, which does not return one.'
+    value: ${{ steps.post.outputs.ts }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Post to Slack
+      id: post
+      shell: bash
+      env:
+        CHANNEL: ${{ inputs.channel }}
+        TEXT: ${{ inputs.text }}
+        BLOCKS: ${{ inputs.blocks }}
+        BOT_TOKEN_INPUT: ${{ inputs.bot-token }}
+        WEBHOOK_URL_INPUT: ${{ inputs.webhook-url }}
+        THREAD_TS: ${{ inputs.thread-ts }}
+        MENTION_GITHUB_USERS: ${{ inputs.mention-github-users }}
+        USERNAME: ${{ inputs.username }}
+        ICON_EMOJI: ${{ inputs.icon-emoji }}
+        FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+      run: |
+        set -uo pipefail
+
+        # Never `set -e` here: every failure path has to reach the fail-on-error
+        # decision at the bottom rather than aborting the step early.
+
+        fail() {
+          echo "::warning::slack-notify: $1"
+          echo "delivered=false" >> "$GITHUB_OUTPUT"
+          echo "ts=" >> "$GITHUB_OUTPUT"
+          if [ "$FAIL_ON_ERROR" = "true" ]; then
+            echo "::error::slack-notify: $1"
+            exit 1
+          fi
+          exit 0
+        }
+
+        # Ambient env var first, explicit input second — the token is usually already
+        # in the environment, and the secrets context is unavailable here.
+        BOT_TOKEN="${SLACK_BOT_TOKEN:-}"
+        [ -n "$BOT_TOKEN_INPUT" ] && BOT_TOKEN="$BOT_TOKEN_INPUT"
+        WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
+        [ -n "$WEBHOOK_URL_INPUT" ] && WEBHOOK_URL="$WEBHOOK_URL_INPUT"
+
+        # Masked even though the caller should have done so already: an unmasked token
+        # in a curl error would otherwise land in the log.
+        [ -n "$BOT_TOKEN" ] && echo "::add-mask::$BOT_TOKEN"
+        [ -n "$WEBHOOK_URL" ] && echo "::add-mask::$WEBHOOK_URL"
+
+        if [ -z "$TEXT" ] && [ -z "$BLOCKS" ]; then
+          fail "nothing to post — supply text, blocks, or both."
+        fi
+
+        if [ -n "$BLOCKS" ] && ! jq -e 'type == "array"' <<<"$BLOCKS" >/dev/null 2>&1; then
+          fail "blocks is not a JSON array."
+        fi
+
+        # Resolve GitHub logins to Slack mentions. Best-effort by design: a mapping
+        # lookup failure degrades to plain @login rather than losing the message.
+        mentions=""
+        if [ -n "$MENTION_GITHUB_USERS" ]; then
+          mappings="$(curl -fsS --max-time 10 \
+            https://raw.githubusercontent.com/hmcts/github-slack-user-mappings/master/slack.json \
+            2>/dev/null || true)"
+          for login in $(tr ',' ' ' <<<"$MENTION_GITHUB_USERS"); do
+            slack_id=""
+            if [ -n "$mappings" ]; then
+              slack_id="$(jq -r --arg u "$login" \
+                'first(.users[]? | select(.github == $u) | .slack) // empty' \
+                <<<"$mappings" 2>/dev/null || true)"
+            fi
+            if [ -n "$slack_id" ]; then
+              mentions="${mentions}<@${slack_id}> "
+            else
+              echo "no Slack mapping for GitHub user '$login' — see https://github.com/hmcts/github-slack-user-mappings"
+              mentions="${mentions}@${login} "
+            fi
+          done
+          TEXT="${mentions}${TEXT}"
+        fi
+
+        if [ -n "$BOT_TOKEN" ]; then
+          if [ -z "$CHANNEL" ]; then
+            fail "channel is required when posting with a bot token."
+          fi
+
+          # Built with jq so text and blocks cannot break the JSON, whatever they contain.
+          payload="$(jq -n \
+            --arg channel "$CHANNEL" \
+            --arg text "$TEXT" \
+            '{channel: $channel} + (if $text == "" then {} else {text: $text} end)')"
+          [ -n "$BLOCKS" ] && payload="$(jq --argjson b "$BLOCKS" '. + {blocks: $b}' <<<"$payload")"
+          [ -n "$THREAD_TS" ] && payload="$(jq --arg t "$THREAD_TS" '. + {thread_ts: $t}' <<<"$payload")"
+          [ -n "$USERNAME" ] && payload="$(jq --arg u "$USERNAME" '. + {username: $u}' <<<"$payload")"
+          [ -n "$ICON_EMOJI" ] && payload="$(jq --arg i "$ICON_EMOJI" '. + {icon_emoji: $i}' <<<"$payload")"
+
+          response="$(curl -sS --max-time 30 -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${BOT_TOKEN}" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            --data-binary "$payload" 2>&1)" || fail "could not reach Slack: $response"
+
+          # chat.postMessage returns HTTP 200 on logical failures, so the body decides.
+          if [ "$(jq -r '.ok // false' <<<"$response" 2>/dev/null)" != "true" ]; then
+            fail "Slack rejected the message: $(jq -r '.error // "unparseable response"' <<<"$response" 2>/dev/null)"
+          fi
+
+          ts="$(jq -r '.ts // empty' <<<"$response")"
+          {
+            echo "delivered=true"
+            echo "ts=${ts}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Posted to ${CHANNEL} (ts=${ts})."
+          exit 0
+        fi
+
+        if [ -n "$WEBHOOK_URL" ]; then
+          [ -n "$THREAD_TS" ] && echo "::warning::slack-notify: thread-ts is ignored when posting via a webhook."
+
+          payload="$(jq -n --arg text "$TEXT" \
+            'if $text == "" then {} else {text: $text} end')"
+          [ -n "$BLOCKS" ] && payload="$(jq --argjson b "$BLOCKS" '. + {blocks: $b}' <<<"$payload")"
+          [ -n "$USERNAME" ] && payload="$(jq --arg u "$USERNAME" '. + {username: $u}' <<<"$payload")"
+          [ -n "$ICON_EMOJI" ] && payload="$(jq --arg i "$ICON_EMOJI" '. + {icon_emoji: $i}' <<<"$payload")"
+
+          body="$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' -X POST "$WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            --data-binary "$payload" 2>&1)" || fail "could not reach the Slack webhook: $body"
+
+          if [ "$body" != "200" ]; then
+            fail "the Slack webhook returned HTTP ${body}."
+          fi
+
+          # Webhooks return "ok", not a timestamp, so there is nothing to thread onto.
+          {
+            echo "delivered=true"
+            echo "ts="
+          } >> "$GITHUB_OUTPUT"
+          echo "Posted via webhook."
+          exit 0
+        fi
+
+        fail "no credentials. Set SLACK_BOT_TOKEN (or pass bot-token), or set SLACK_WEBHOOK_URL (or pass webhook-url)."
