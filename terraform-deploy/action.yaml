@@ -220,7 +220,7 @@ runs:
 
     - name: Post Plan to PR
       if: ${{ github.event.pull_request.number && steps.plan.outputs.exitcode == '2' && inputs.post-plan-to-pr == 'true' }}
-      uses: actions/github-script@v7
+      uses: actions/github-script@v9
       with:
         script: |
           const fs = require('fs');
