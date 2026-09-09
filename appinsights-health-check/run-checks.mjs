@@ -513,8 +513,25 @@ for (const check of checks) {
 // Resolution: anything previously reported that is no longer firing.
 const resolved = Object.keys(state.lastNotified).filter((fp) => !firingFingerprints.has(fp));
 
-const suppressed = allFindings.filter((f) => f.suppressed);
-const notSuppressed = allFindings.filter((f) => !f.suppressed);
+// Collapse to one finding per fingerprint. A query almost always groups by more
+// columns than fingerprint-by names — grouping by outerMessage while fingerprinting on
+// problemId, say — so the same incident arrives as several rows. Left uncollapsed it
+// would be reported repeatedly and would consume several max-findings slots, crowding
+// out unrelated problems. The extra rows are kept so nothing is lost.
+const byFingerprint = new Map();
+for (const finding of allFindings) {
+  const existing = byFingerprint.get(finding.fingerprint);
+  if (existing) {
+    existing.rows.push(finding.row);
+  } else {
+    byFingerprint.set(finding.fingerprint, { ...finding, rows: [finding.row] });
+  }
+}
+const collapsedFindings = [...byFingerprint.values()];
+const duplicateRowCount = allFindings.length - collapsedFindings.length;
+
+const suppressed = collapsedFindings.filter((f) => f.suppressed);
+const notSuppressed = collapsedFindings.filter((f) => !f.suppressed);
 
 const stillQuiet = [];
 const fresh = [];
@@ -606,7 +623,8 @@ if (resolved.length) {
 console.log(
   `${verdicts.filter((v) => v.fired).length} of ${verdicts.length} check(s) fired. ` +
     `${emitted.length} reported, ${deferred.length} deferred, ${stillQuiet.length} within re-notify window, ` +
-    `${suppressed.length} suppressed, ${resolved.length} resolved.`
+    `${suppressed.length} suppressed, ${resolved.length} resolved` +
+    (duplicateRowCount ? `, ${duplicateRowCount} duplicate row(s) collapsed by fingerprint.` : ".")
 );
 
 if (anyFired && env("FAIL_ON_BREACH") === "true") {

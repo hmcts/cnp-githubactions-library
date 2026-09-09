@@ -33,6 +33,16 @@ on:
         required: false
         type: string
         default: ''
+      state-key:
+        description: |
+          Stable identifier for this monitor, used to scope its deduplication state.
+          Defaults to app-id, then config-path. Set it explicitly when one repository
+          runs several monitors that share both — otherwise they read each other's
+          state, which suppresses genuine findings and reports unrelated fingerprints
+          as resolved.
+        required: false
+        type: string
+        default: ''
       runner:
         description: 'GitHub runner to use.'
         required: false
@@ -85,16 +95,39 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       # Deduplication is only meaningful if state survives between runs. Restored on a
-      # prefix match because the exact key is per-run, which is what makes the save
-      # below succeed every time rather than colliding with an existing entry.
+      # Dedup state is per-monitor, so the cache key has to identify the monitor and
+      # nothing broader. An unscoped fallback would let one monitor restore another's
+      # state, which does not merely mislead: every fingerprint in the borrowed state
+      # that this monitor is not currently seeing gets reported as resolved, and any
+      # that overlap get suppressed as already-notified.
+      #
+      # app-id alone is not enough, because it is optional here — when it comes from the
+      # config file this input is empty, and every monitor in the repo would collapse to
+      # the same key.
+      - name: Derive the state scope
+        id: scope
+        shell: bash
+        env:
+          STATE_KEY: ${{ inputs.state-key }}
+          APP_ID: ${{ inputs.app-id }}
+          CONFIG_PATH: ${{ inputs.config-path }}
+        run: |
+          set -euo pipefail
+          scope="${STATE_KEY:-${APP_ID:-$CONFIG_PATH}}"
+          # Cache keys cannot contain commas, and slashes are legal but unreadable.
+          scope=$(printf '%s' "$scope" | tr -c '[:alnum:]._-' '-')
+          echo "value=$scope" >> "$GITHUB_OUTPUT"
+          echo "state scope: $scope"
+
+      # The exact key is per-run so the save below never collides with an existing
+      # entry; the prefix match is what actually finds the previous run's state.
       - name: Restore watchdog state
         uses: actions/cache/restore@v4
         with:
           path: .watchdog-state.json
-          key: watchdog-state-${{ inputs.app-id }}-${{ github.run_id }}
+          key: watchdog-state-${{ steps.scope.outputs.value }}-${{ github.run_id }}
           restore-keys: |
-            watchdog-state-${{ inputs.app-id }}-
-            watchdog-state-
+            watchdog-state-${{ steps.scope.outputs.value }}-
 
       - name: Run health checks
         id: check
@@ -114,7 +147,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .watchdog-state.json
-          key: watchdog-state-${{ inputs.app-id }}-${{ github.run_id }}
+          key: watchdog-state-${{ steps.scope.outputs.value }}-${{ github.run_id }}
 
       - name: Upload the verdict artefact
         if: always()

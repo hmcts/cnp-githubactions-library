@@ -178,6 +178,8 @@ For a `column` rule, each breaching row is a separate finding. For `rows`, the c
 
 `fingerprint-by` names the columns identifying a distinct incident. A fingerprint is `<check-id>:<values joined by ':'>`. Two runs producing the same fingerprint are the same incident, so it is reported once until `renotify-after` elapses.
 
+A query usually groups by more columns than `fingerprint-by` names — grouping by `outerMessage` while fingerprinting on `problemId`, say — so one incident arrives as several rows. Those are collapsed into a single finding before the cap is applied, with every contributing row kept under `rows`, so one noisy problem cannot crowd out unrelated ones. The run summary reports how many rows were collapsed.
+
 Choose columns that are stable for the same underlying problem and different for genuinely different problems. `problemId` is good; a timestamp or a count is not.
 
 ### Suppressions
@@ -212,6 +214,7 @@ Review them periodically: an entry that has not fired in 90 days is probably hid
 ## Notes
 
 - **State must persist between runs**, or every run re-reports everything. Cache it, as in the example, or commit it to a branch.
+- **Scope that state to one monitor.** If two monitors in a repository can restore each other's state, the damage is not just noise: every fingerprint in the borrowed state that this monitor is not currently seeing is reported as `resolved`, and any that overlap are suppressed as already-notified. Include the app ID or an explicit key in the cache key, and do not add an unscoped `restore-keys` fallback. The reusable workflow does this for you via its `state-key` input.
 - **Scheduled workflows only run the default branch's copy** of the workflow file, and GitHub drops `schedule` triggers under load. Consider a check that alerts when the watchdog itself has not run recently.
 - **Watch query cost.** A `join` over a 7-day baseline every 15 minutes adds up. The summary reports each query's execution time.
 - **Validate queries in the portal first**, and record the observed baseline alongside the threshold. A badly-scoped query either cries wolf or hides a real incident, and the action cannot tell which.
