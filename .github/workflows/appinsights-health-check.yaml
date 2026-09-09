@@ -131,6 +131,11 @@ jobs:
           restore-keys: |
             watchdog-state-${{ steps.scope.outputs.value }}-
 
+      # @main deliberately, and it means pinning this workflow does not pin the
+      # detection logic. `uses` cannot take an expression, so no input could override
+      # it, and tying it to a tag would need a manual bump on every release that this
+      # repo has no automation for. Consumers who need the logic itself immutable
+      # should call the composite action directly and pin that — see the companion .md.
       - name: Run health checks
         id: check
         uses: hmcts/cnp-githubactions-library/appinsights-health-check@main

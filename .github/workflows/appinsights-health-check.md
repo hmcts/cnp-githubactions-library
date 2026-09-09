@@ -151,6 +151,7 @@ The full verdict artefact — every check with its query, row count, rule and ou
 ## Notes
 
 - **Pin to a tag or SHA** rather than `@main`. An unpinned watchdog is a self-inflicted outage.
+- **Pinning this workflow does not pin the action it calls.** The workflow references `appinsights-health-check@main` internally, and `uses` cannot take an expression — GitHub's docs are explicit that "you cannot use contexts or expressions in this keyword" — so there is no input that could override it. A change to `main` therefore reaches you even on a pinned workflow. That is an accepted trade for the convenience this wrapper provides; if you need the detection logic itself to be immutable, [call the composite action directly](../../appinsights-health-check/README.md) and pin that.
 - **Scheduled workflows only ever run the default branch's copy** of the workflow file, so changes do nothing until merged. `workflow_dispatch` is there to test on a branch.
 - **GitHub drops `schedule` triggers under load.** Consider a separate check that alerts when the watchdog itself has not run recently.
 - State is cached, so it survives normal runs but not a cache eviction. After an eviction the next run re-reports open findings once.
