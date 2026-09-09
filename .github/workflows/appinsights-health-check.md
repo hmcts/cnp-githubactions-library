@@ -146,7 +146,7 @@ jobs:
 | `deferred-count` | Fresh findings that exceeded `max-findings`. |
 | `resolved` | Fingerprints that were firing and are now clean. |
 
-The full verdict artefact — every check with its query, row count, rule and outcome — is uploaded as `appinsights-health-check-findings`, retained 14 days.
+The full verdict artefact — every check with its query, row count, rule and outcome — is uploaded as `appinsights-health-check-findings-<run_id>-<run_attempt>`, retained 14 days.
 
 ## Notes
 

@@ -94,7 +94,6 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Deduplication is only meaningful if state survives between runs. Restored on a
       # Dedup state is per-monitor, so the cache key has to identify the monitor and
       # nothing broader. An unscoped fallback would let one monitor restore another's
       # state, which does not merely mislead: every fingerprint in the borrowed state
@@ -119,13 +118,16 @@ jobs:
           echo "value=$scope" >> "$GITHUB_OUTPUT"
           echo "state scope: $scope"
 
-      # The exact key is per-run so the save below never collides with an existing
+      # The exact key is per-attempt so the save below never collides with an existing
       # entry; the prefix match is what actually finds the previous run's state.
+      # run_attempt matters as well as run_id: re-running a workflow keeps the same
+      # run_id, and caches are immutable, so without it a re-run could not persist
+      # anything it newly found.
       - name: Restore watchdog state
         uses: actions/cache/restore@v4
         with:
           path: .watchdog-state.json
-          key: watchdog-state-${{ steps.scope.outputs.value }}-${{ github.run_id }}
+          key: watchdog-state-${{ steps.scope.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             watchdog-state-${{ steps.scope.outputs.value }}-
 
@@ -147,13 +149,15 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .watchdog-state.json
-          key: watchdog-state-${{ steps.scope.outputs.value }}-${{ github.run_id }}
+          key: watchdog-state-${{ steps.scope.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload the verdict artefact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: appinsights-health-check-findings
+          # Artefact names are unique within a run and cannot be overwritten, so a
+          # re-run would fail the upload outright without run_attempt.
+          name: appinsights-health-check-findings-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.check.outputs.findings-path }}
           if-no-files-found: ignore
           retention-days: 14

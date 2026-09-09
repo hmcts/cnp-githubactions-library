@@ -68,12 +68,18 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Dedup needs the state file to survive between runs.
+      # Dedup needs the state file to survive between runs. Two details matter:
+      #
+      #   - run_attempt as well as run_id. Re-running a workflow reuses run_id, and
+      #     caches are immutable, so without it a re-run cannot persist what it found.
+      #   - the restore prefix names this monitor. Anything broader lets a second
+      #     monitor in the repo read this one's state, which reports its fingerprints
+      #     as resolved and suppresses the ones that overlap.
       - uses: actions/cache/restore@v4
         with:
           path: .watchdog-state.json
-          key: watchdog-state-${{ github.run_id }}
-          restore-keys: watchdog-state-
+          key: watchdog-state-aat-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: watchdog-state-aat-
 
       - id: check
         uses: hmcts/cnp-githubactions-library/appinsights-health-check@main
@@ -84,12 +90,14 @@ jobs:
         if: always()
         with:
           path: .watchdog-state.json
-          key: watchdog-state-${{ github.run_id }}
+          key: watchdog-state-aat-${{ github.run_id }}-${{ github.run_attempt }}
 
+      # Artefact names are unique within a run and cannot be overwritten, so a re-run
+      # fails the upload without run_attempt.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: watchdog-findings
+          name: watchdog-findings-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.check.outputs.findings-path }}
 ```
 
