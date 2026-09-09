@@ -1,0 +1,204 @@
+name: 'Helm Publish'
+description: 'Package Helm charts and push them to an HMCTS Azure Container Registry, versioned so the newest build always resolves highest'
+author: 'HMCTS'
+
+inputs:
+  azure-client-id:
+    description: 'Azure client ID for OIDC authentication. Leave empty if the job has already run azure/login and az acr login.'
+    required: false
+    default: ''
+  azure-tenant-id:
+    description: 'Azure tenant ID for OIDC authentication'
+    required: false
+    default: '531ff96d-0ae9-462a-8d2d-bec7c0b42082'
+  registry:
+    description: 'Container registry to publish to. Charts land under <registry>/helm/<chart-name>.'
+    required: false
+    default: 'hmctsprod.azurecr.io'
+  chart:
+    description: 'Path to a chart to publish (e.g. helm/my-app). Combine with chart-paths to publish an umbrella chart alongside its subcharts.'
+    required: false
+    default: ''
+  chart-paths:
+    description: 'Glob matching several chart directories to publish, for monorepos (e.g. apps/*/helm)'
+    required: false
+    default: ''
+  short-sha:
+    description: 'Short git SHA recorded in the chart version. Defaults to the first 7 characters of the triggering commit.'
+    required: false
+    default: ''
+  helm-repos:
+    description: 'Chart repositories to add before resolving dependencies, one name=url per line (e.g. bitnami=https://charts.bitnami.com/bitnami)'
+    required: false
+    default: ''
+  helm-version:
+    description: 'Version of Helm to use'
+    required: false
+    default: 'v3.14.0'
+  dry-run:
+    description: 'Package the charts and report the version, but do not push'
+    required: false
+    default: 'false'
+
+outputs:
+  version-suffix:
+    description: 'Prerelease suffix shared by every chart in this run (e.g. t20260909150000.gabc1234). Each chart is published as its own Chart.yaml version plus this suffix, so where charts carry different versions this is the only value common to all of them.'
+    value: ${{ steps.publish.outputs.version-suffix }}
+  chart-version:
+    description: 'Full version the chart named by the chart input was published as. Empty when only chart-paths was used.'
+    value: ${{ steps.publish.outputs.chart-version }}
+  charts-published:
+    description: 'Space-separated name=version pairs for every chart that was pushed'
+    value: ${{ steps.publish.outputs.charts-published }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check inputs
+      shell: bash
+      env:
+        CHART: ${{ inputs.chart }}
+        CHART_PATHS: ${{ inputs.chart-paths }}
+      run: |
+        if [ -z "$CHART" ] && [ -z "$CHART_PATHS" ]; then
+          echo "::error::Set chart, chart-paths, or both — there is nothing to publish otherwise"
+          exit 1
+        fi
+
+    - name: Azure Login
+      if: inputs.azure-client-id != ''
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        allow-no-subscriptions: true
+
+    - name: ACR Login
+      if: inputs.azure-client-id != ''
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+      run: az acr login --name "${REGISTRY%%.*}"
+
+    - name: Set up Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: ${{ inputs.helm-version }}
+
+    - name: Add chart repositories
+      if: inputs.helm-repos != ''
+      shell: bash
+      env:
+        HELM_REPOS: ${{ inputs.helm-repos }}
+      run: |
+        while IFS= read -r entry; do
+          [ -z "$entry" ] && continue
+          helm repo add "${entry%%=*}" "${entry#*=}"
+        done <<< "$HELM_REPOS"
+        helm repo update
+
+    - name: Package and push charts
+      id: publish
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        CHART: ${{ inputs.chart }}
+        CHART_PATHS: ${{ inputs.chart-paths }}
+        SHORT_SHA_INPUT: ${{ inputs.short-sha }}
+        COMMIT_SHA: ${{ github.sha }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        set -euo pipefail
+        mkdir -p ./dist
+
+        SHORT_SHA="${SHORT_SHA_INPUT:-$(echo "$COMMIT_SHA" | cut -c1-7)}"
+
+        # A leading LETTER on both identifiers is deliberate, and it is the point of this action.
+        # See helm-publish/README.md: semver compares prerelease identifiers lexically and ranks numeric
+        # ones below alphanumeric, so a bare SHA and a bare timestamp both resolve to the wrong chart.
+        SUFFIX="t$(date +%Y%m%d%H%M%S).g${SHORT_SHA}"
+
+        PUBLISHED=""
+        VERSION=""
+        LAST_VERSION=""
+
+        publish_chart() {
+          local chart_dir="$1"
+
+          if [ ! -f "${chart_dir}/Chart.yaml" ]; then
+            echo "::warning::No Chart.yaml in ${chart_dir}, skipping"
+            return 0
+          fi
+
+          local name base_version chart_version
+          name=$(awk '/^name:/ {print $2; exit}' "${chart_dir}/Chart.yaml" | tr -d "\"'")
+          base_version=$(awk '/^version:/ {print $2; exit}' "${chart_dir}/Chart.yaml" | tr -d "\"'")
+
+          if [ -z "${name}" ] || [ -z "${base_version}" ]; then
+            echo "::error::Could not read name and version from ${chart_dir}/Chart.yaml"
+            return 1
+          fi
+
+          chart_version="${base_version}-${SUFFIX}"
+          LAST_VERSION="${chart_version}"
+
+          echo "Packaging ${name} ${chart_version} from ${chart_dir}"
+          helm dependency update "${chart_dir}"
+          helm package "${chart_dir}" --version "${chart_version}" -d ./dist
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "Dry run, not pushing ${name}:${chart_version}"
+          else
+            helm push "./dist/${name}-${chart_version}.tgz" "oci://${REGISTRY}/helm"
+            echo "Published ${name}:${chart_version}"
+          fi
+
+          PUBLISHED="${PUBLISHED}${PUBLISHED:+ }${name}=${chart_version}"
+        }
+
+        # Subcharts first: an umbrella chart's dependencies must be in the registry before it is packaged.
+        if [ -n "$CHART_PATHS" ]; then
+          shopt -s nullglob
+          for chart_dir in $CHART_PATHS; do
+            publish_chart "${chart_dir}"
+          done
+          shopt -u nullglob
+        fi
+
+        if [ -n "$CHART" ]; then
+          publish_chart "$CHART"
+          VERSION="${LAST_VERSION}"
+        fi
+
+        if [ -z "${PUBLISHED}" ]; then
+          echo "::error::No charts matched — check chart and chart-paths"
+          exit 1
+        fi
+
+        echo "charts-published=${PUBLISHED}" >> "$GITHUB_OUTPUT"
+        echo "chart-version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "version-suffix=${SUFFIX}" >> "$GITHUB_OUTPUT"
+
+    - name: Output publish summary
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        VERSION_SUFFIX: ${{ steps.publish.outputs.version-suffix }}
+        CHARTS_PUBLISHED: ${{ steps.publish.outputs.charts-published }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        {
+          echo "### Helm Chart Publish Summary :package:"
+          echo ""
+          echo "**Version suffix:** \`${VERSION_SUFFIX}\`"
+          echo "**Registry:** \`oci://${REGISTRY}/helm\`"
+          echo ""
+          echo "**Charts:**"
+          for pair in ${CHARTS_PUBLISHED}; do
+            echo "- \`${pair%%=*}\` \`${pair#*=}\`"
+          done
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo ""
+            echo "> :information_source: **Dry run. Nothing was pushed.**"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"

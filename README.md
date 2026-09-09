@@ -9,6 +9,7 @@ A reusable library of GitHub Actions workflows for HMCTS CNP (Cloud Native Platf
 - [Available Workflows](#available-workflows)
   - [Container Build and Push](#container-build-and-push)
   - [Helm Deploy](#helm-deploy)
+  - [Helm Publish](#helm-publish)
   - [npm Publish Library](#npm-publish-library)
   - [Draft Release](#draft-release)
   - [Update Changelog](#update-changelog)
@@ -165,6 +166,65 @@ jobs:
 | Multiple releases in one job | ❌ | ✅ |
 | Integration with other actions | ❌ | ✅ |
 | Matrix strategy deployments | ❌ | ✅ |
+
+### Helm Publish
+
+Package Helm charts and push them to an HMCTS Azure Container Registry, versioned so the newest build always resolves highest.
+
+For repositories that do not use the standard CNP Jenkins pipeline. A Jenkins-built service has its chart published to [`hmcts/hmcts-charts`](https://github.com/hmcts/hmcts-charts) as `stable/<chart-name>` and flux reads it from there — nothing in GitHub Actions writes to that repository, so a GitHub Actions service publishes to a registry and points flux at that instead.
+
+> The version scheme is deliberate and worth reading before you copy it: `<Chart.yaml version>-t<timestamp>.g<short-sha>`. Semver compares prerelease identifiers **lexically** and ranks numeric identifiers **below** alphanumeric ones, so the obvious `<version>-<short-sha>` resolves to the highest-*sorting* build rather than the newest — one HMCTS app deployed a six-month-old chart for exactly this reason, reporting healthy throughout. See [How charts are versioned](helm-publish/README.md#how-charts-are-versioned-and-why-it-looks-odd).
+
+**Available in Two Formats:**
+
+#### 1. Reusable Workflow (Simple, Standardised)
+
+📖 **[View workflow documentation](.github/workflows/helm-publish.md)**
+
+```yaml
+jobs:
+  publish-charts:
+    uses: hmcts/cnp-githubactions-library/.github/workflows/helm-publish.yaml@main
+    with:
+      chart: helm/my-app
+    secrets: inherit
+```
+
+#### 2. Composite Action (Flexible, Extensible)
+
+Use when the charts need generating or templating first — put your own steps ahead of it.
+
+📖 **[View action documentation](helm-publish/README.md)**
+
+```yaml
+jobs:
+  publish-charts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hmcts/cnp-githubactions-library/helm-publish@main
+        id: publish
+        with:
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          chart-paths: 'apps/*/helm'
+          chart: helm/my-monorepo
+          helm-repos: |
+            bitnami=https://charts.bitnami.com/bitnami
+```
+
+**Features:**
+- Chart versions order by build time, so a flux range or a version pin always points at the newest chart
+- Publishes monorepo subcharts before the umbrella chart, since the umbrella's dependencies must exist in the registry before it can be packaged
+- One timestamp per run, so every chart from the same build shares a suffix
+- Resolves chart dependencies and can add chart repositories first
+- `dry-run` mode packages and reports without pushing, so pull requests can verify the charts build
+- OIDC login, or skip it and reuse a login the job already did
+- Outputs `version-suffix`, `chart-version` and `charts-published` (`name=version` pairs) for wiring the result into `cnp-flux-config`
+- Documents [how to wire the published chart into flux](helm-publish/README.md#wiring-it-into-flux), which is where this most often goes wrong
 
 ### npm Publish Library
 

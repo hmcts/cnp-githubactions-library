@@ -1,0 +1,90 @@
+name: Helm Publish
+
+on:
+  workflow_call:
+    inputs:
+      chart:
+        description: 'Path to a chart to publish (e.g. helm/my-app). Set this, chart-paths, or both.'
+        required: false
+        type: string
+        default: ''
+      chart-paths:
+        description: 'Glob matching several chart directories to publish, for monorepos (e.g. apps/*/helm)'
+        required: false
+        type: string
+        default: ''
+      registry:
+        description: 'Container registry to publish to. Charts land under <registry>/helm/<chart-name>.'
+        required: false
+        type: string
+        default: 'hmctsprod.azurecr.io'
+      short-sha:
+        description: 'Short git SHA recorded in the chart version. Defaults to the first 7 characters of the triggering commit.'
+        required: false
+        type: string
+        default: ''
+      helm-repos:
+        description: 'Chart repositories to add before resolving dependencies, one name=url per line'
+        required: false
+        type: string
+        default: ''
+      helm-version:
+        description: 'Version of Helm to use'
+        required: false
+        type: string
+        default: 'v3.14.0'
+      dry-run:
+        description: 'Package the charts and report the version, but do not push. Useful on pull requests.'
+        required: false
+        type: boolean
+        default: false
+      runner:
+        description: 'GitHub runner to use.'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      AZURE_CLIENT_ID:
+        description: 'Client ID of the app registration federated with this repository, used for OIDC login to the registry.'
+        required: true
+      AZURE_TENANT_ID:
+        description: 'Tenant ID for OIDC login. Defaults to the HMCTS tenant when not supplied.'
+        required: false
+    outputs:
+      version-suffix:
+        description: 'Prerelease suffix shared by every chart in this run.'
+        value: ${{ jobs.publish.outputs.version-suffix }}
+      chart-version:
+        description: 'Full version the chart input was published as.'
+        value: ${{ jobs.publish.outputs.chart-version }}
+      charts-published:
+        description: 'Space-separated name=version pairs for every chart that was pushed.'
+        value: ${{ jobs.publish.outputs.charts-published }}
+
+jobs:
+  publish:
+    name: Publish Helm charts
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      version-suffix: ${{ steps.publish.outputs.version-suffix }}
+      chart-version: ${{ steps.publish.outputs.chart-version }}
+      charts-published: ${{ steps.publish.outputs.charts-published }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish charts
+        id: publish
+        uses: hmcts/cnp-githubactions-library/helm-publish@main
+        with:
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID || '531ff96d-0ae9-462a-8d2d-bec7c0b42082' }}
+          registry: ${{ inputs.registry }}
+          chart: ${{ inputs.chart }}
+          chart-paths: ${{ inputs.chart-paths }}
+          short-sha: ${{ inputs.short-sha }}
+          helm-repos: ${{ inputs.helm-repos }}
+          helm-version: ${{ inputs.helm-version }}
+          dry-run: ${{ inputs.dry-run }}
