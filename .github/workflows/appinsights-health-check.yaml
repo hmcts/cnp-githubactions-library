@@ -1,0 +1,168 @@
+name: Application Insights health check
+
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        description: 'Path to the check configuration file in the calling repository.'
+        required: false
+        type: string
+        default: '.github/watchdog.yml'
+      app-id:
+        description: 'Application Insights app ID (the GUID, not the resource name). Overrides the config file.'
+        required: false
+        type: string
+        default: ''
+      window:
+        description: 'Evaluation window, substituted into queries as {{window}}.'
+        required: false
+        type: string
+        default: '15m'
+      baseline-window:
+        description: 'Comparison window for regression checks, substituted as {{baseline}}.'
+        required: false
+        type: string
+        default: '7d'
+      max-findings:
+        description: 'Cap on fresh findings emitted per run. The remainder is counted, not dropped.'
+        required: false
+        type: number
+        default: 3
+      renotify-after:
+        description: 'How long a reported finding stays suppressed, e.g. 6h.'
+        required: false
+        type: string
+        default: ''
+      state-key:
+        description: |
+          Stable identifier for this monitor, used to scope its deduplication state.
+          Defaults to app-id, then config-path. Set it explicitly when one repository
+          runs several monitors that share both — otherwise they read each other's
+          state, which suppresses genuine findings and reports unrelated fingerprints
+          as resolved.
+        required: false
+        type: string
+        default: ''
+      runner:
+        description: 'GitHub runner to use.'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      AZURE_CLIENT_ID:
+        description: 'Client ID of the app registration used for OIDC. Needs Monitoring Reader on the Application Insights resource.'
+        required: true
+      AZURE_TENANT_ID:
+        description: 'Azure tenant ID.'
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        description: 'Subscription containing the Application Insights resource.'
+        required: true
+    outputs:
+      breached:
+        description: 'Whether any check produced a fresh finding.'
+        value: ${{ jobs.check.outputs.breached }}
+      findings:
+        description: 'Fresh findings as a JSON array.'
+        value: ${{ jobs.check.outputs.findings }}
+      deferred-count:
+        description: 'Fresh findings that exceeded max-findings.'
+        value: ${{ jobs.check.outputs.deferred-count }}
+      resolved:
+        description: 'Fingerprints that were firing and are now clean.'
+        value: ${{ jobs.check.outputs.resolved }}
+
+jobs:
+  check:
+    name: Health check
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      breached: ${{ steps.check.outputs.breached }}
+      findings: ${{ steps.check.outputs.findings }}
+      deferred-count: ${{ steps.check.outputs.deferred-count }}
+      resolved: ${{ steps.check.outputs.resolved }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Dedup state is per-monitor, so the cache key has to identify the monitor and
+      # nothing broader. An unscoped fallback would let one monitor restore another's
+      # state, which does not merely mislead: every fingerprint in the borrowed state
+      # that this monitor is not currently seeing gets reported as resolved, and any
+      # that overlap get suppressed as already-notified.
+      #
+      # app-id alone is not enough, because it is optional here — when it comes from the
+      # config file this input is empty, and every monitor in the repo would collapse to
+      # the same key.
+      - name: Derive the state scope
+        id: scope
+        shell: bash
+        env:
+          STATE_KEY: ${{ inputs.state-key }}
+          APP_ID: ${{ inputs.app-id }}
+          CONFIG_PATH: ${{ inputs.config-path }}
+        run: |
+          set -euo pipefail
+          scope="${STATE_KEY:-${APP_ID:-$CONFIG_PATH}}"
+          # Cache keys cannot contain commas, and slashes are legal but unreadable.
+          scope=$(printf '%s' "$scope" | tr -c '[:alnum:]._-' '-')
+          echo "value=$scope" >> "$GITHUB_OUTPUT"
+          echo "state scope: $scope"
+
+      # The exact key is per-attempt so the save below never collides with an existing
+      # entry; the prefix match is what actually finds the previous run's state.
+      # run_attempt matters as well as run_id: re-running a workflow keeps the same
+      # run_id, and caches are immutable, so without it a re-run could not persist
+      # anything it newly found.
+      - name: Restore watchdog state
+        uses: actions/cache/restore@v4
+        with:
+          path: .watchdog-state.json
+          key: watchdog-state-${{ steps.scope.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            watchdog-state-${{ steps.scope.outputs.value }}-
+
+      # @main deliberately, and it means pinning this workflow does not pin the
+      # detection logic. `uses` cannot take an expression, so no input could override
+      # it, and tying it to a tag would need a manual bump on every release that this
+      # repo has no automation for. Consumers who need the logic itself immutable
+      # should call the composite action directly and pin that — see the companion .md.
+      - name: Run health checks
+        id: check
+        uses: hmcts/cnp-githubactions-library/appinsights-health-check@main
+        with:
+          config-path: ${{ inputs.config-path }}
+          app-id: ${{ inputs.app-id }}
+          window: ${{ inputs.window }}
+          baseline-window: ${{ inputs.baseline-window }}
+          max-findings: ${{ inputs.max-findings }}
+          renotify-after: ${{ inputs.renotify-after }}
+
+      # always(): a failed check run must not lose the state, or the next run
+      # re-reports everything it already reported.
+      - name: Save watchdog state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .watchdog-state.json
+          key: watchdog-state-${{ steps.scope.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload the verdict artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # Artefact names are unique within a run and cannot be overwritten, so a
+          # re-run would fail the upload outright without run_attempt.
+          name: appinsights-health-check-findings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.check.outputs.findings-path }}
+          if-no-files-found: ignore
+          retention-days: 14

@@ -1,0 +1,104 @@
+name: 'Application Insights Health Check'
+description: 'Run a consumer-defined set of Application Insights queries on a schedule, evaluate them against thresholds, and emit deduplicated findings'
+author: 'HMCTS'
+
+inputs:
+  config-path:
+    description: 'Path to the check configuration file in the calling repository.'
+    required: false
+    default: '.github/watchdog.yml'
+  app-id:
+    description: 'Application Insights app ID (the GUID, not the resource name). Overrides the config file, so one config can serve several environments from a matrix.'
+    required: false
+    default: ''
+  window:
+    description: 'Evaluation window, substituted into queries as {{window}}. Any KQL timespan literal, e.g. 15m, 1h.'
+    required: false
+    default: '15m'
+  baseline-window:
+    description: 'Comparison window for regression checks, substituted as {{baseline}}.'
+    required: false
+    default: '7d'
+  max-findings:
+    description: |
+      Cap on fresh findings emitted per run. Anything beyond the cap is counted in
+      deferred-count and named in the summary rather than dropped silently. Guards
+      against a single bad deploy fanning out into hundreds of downstream jobs.
+    required: false
+    default: '3'
+  renotify-after:
+    description: 'How long a finding stays suppressed after being reported, as a duration like 6h or 30m. Overrides the config default.'
+    required: false
+    default: ''
+  state-path:
+    description: 'File the run state (last-notified timestamps per fingerprint) is read from and written to. Restore and save it around this action to make deduplication work across runs.'
+    required: false
+    default: '.watchdog-state.json'
+  fail-on-breach:
+    description: |
+      Fail the step when any check fires. Defaults to false: a breach is normally
+      handled by a downstream job reading the breached output, and a red run would
+      be indistinguishable from the action itself being broken.
+    required: false
+    default: 'false'
+
+outputs:
+  breached:
+    description: 'Whether any check fired ("true" or "false"). Gate downstream jobs on this.'
+    value: ${{ steps.run.outputs.breached }}
+  findings:
+    description: 'Fresh findings as a JSON array, after suppression, deduplication and capping.'
+    value: ${{ steps.run.outputs.findings }}
+  findings-path:
+    description: 'Path to the full verdict artefact: every check, its query, row count, rule and outcome.'
+    value: ${{ steps.run.outputs.findings-path }}
+  deferred-count:
+    description: 'Fresh findings that exceeded max-findings and were not emitted.'
+    value: ${{ steps.run.outputs.deferred-count }}
+  resolved:
+    description: 'Fingerprints that were firing on a previous run and are now clean, as a JSON array.'
+    value: ${{ steps.run.outputs.resolved }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Acquire an Application Insights token
+      id: token
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # The az CLI's application-insights extension is not preinstalled on hosted
+        # runners and installing it on every scheduled run is a needless dependency,
+        # so this uses the REST API with a token from the ambient az login session.
+        if ! command -v az >/dev/null 2>&1; then
+          echo "::error::appinsights-health-check: the az CLI is not available. Run azure/login before this action."
+          exit 1
+        fi
+
+        if ! token="$(az account get-access-token \
+              --resource https://api.applicationinsights.io \
+              --query accessToken -o tsv 2>&1)"; then
+          echo "::error::appinsights-health-check: could not get an Application Insights token. Is azure/login configured, and does the principal have Monitoring Reader on the resource? ${token}"
+          exit 1
+        fi
+
+        echo "::add-mask::$token"
+        echo "token=$token" >> "$GITHUB_OUTPUT"
+
+    - name: Run health checks
+      id: run
+      shell: bash
+      env:
+        CONFIG_PATH: ${{ inputs.config-path }}
+        APP_ID: ${{ inputs.app-id }}
+        WINDOW: ${{ inputs.window }}
+        BASELINE_WINDOW: ${{ inputs.baseline-window }}
+        MAX_FINDINGS: ${{ inputs.max-findings }}
+        RENOTIFY_AFTER: ${{ inputs.renotify-after }}
+        STATE_PATH: ${{ inputs.state-path }}
+        FAIL_ON_BREACH: ${{ inputs.fail-on-breach }}
+        AI_TOKEN: ${{ steps.token.outputs.token }}
+      run: |
+        set -euo pipefail
+        node "${GITHUB_ACTION_PATH}/run-checks.mjs"

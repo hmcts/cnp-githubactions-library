@@ -13,6 +13,8 @@ A reusable library of GitHub Actions workflows for HMCTS CNP (Cloud Native Platf
   - [Draft Release](#draft-release)
   - [Update Changelog](#update-changelog)
   - [Publish OpenAPI Spec](#publish-openapi-spec)
+  - [Application Insights Health Check](#application-insights-health-check)
+  - [Slack Notify](#slack-notify)
 - [Usage](#usage)
 - [Contributing](#contributing)
 - [License](#license)
@@ -371,6 +373,100 @@ jobs:
 - Accepts OpenAPI 3.x and Swagger 2.0
 - Uses the org-level `SWAGGER_PUBLISHER_API_TOKEN`, so `secrets: inherit` is enough for the reusable workflow, and a one-line job `env` for the action (GitHub does not expose the `secrets` context to composite actions)
 - Outputs `published`, `spec-name`, and `spec-url`
+
+### Application Insights Health Check
+
+Run a set of Application Insights queries on a schedule, evaluate each against a threshold, and emit deduplicated findings for a downstream job to act on — a Slack post, a triage job, whatever the consumer needs.
+
+**The action ships no queries.** Every KQL query, threshold and suppression lives in a config file in the consuming repo (`.github/watchdog.yml` by default). Services differ too much for a shared query set to be right, and a team should be able to tune its own monitoring without a PR against this repository.
+
+**Available in Two Formats:**
+
+#### 1. Reusable Workflow (Simple, Standardised)
+
+Handles the OIDC login, the state cache and the artefact upload.
+
+📖 **[View workflow documentation](.github/workflows/appinsights-health-check.md)**
+
+```yaml
+jobs:
+  detect:
+    uses: hmcts/cnp-githubactions-library/.github/workflows/appinsights-health-check.yaml@main
+    with:
+      config-path: .github/watchdog.yml
+    secrets: inherit
+```
+
+#### 2. Composite Action (Flexible, Extensible)
+
+For a matrix across environments, or when state needs persisting differently.
+
+📖 **[View action documentation](appinsights-health-check/README.md)**
+
+```yaml
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - id: check
+        uses: hmcts/cnp-githubactions-library/appinsights-health-check@main
+        with:
+          app-id: ${{ matrix.app-id }}
+```
+
+**Features:**
+- Consumer-defined KQL with `{{window}}` and `{{baseline}}` substituted in
+- A deliberately small threshold grammar — `rows > 0`, `rows == 0`, or a per-row column comparison. Anything more expressive belongs in the KQL, where it can be tested in the portal
+- Per-finding fingerprinting, so an ongoing incident is reported once rather than every run
+- Suppression list in the consumer's config, requiring a stated reason for every entry, so silencing is auditable rather than invisible
+- Caps findings per run and reports what was deferred, so one bad deploy cannot fan out into hundreds of downstream jobs
+- Reports resolution when a previously-firing finding goes clean
+- Queries the REST API using the ambient `azure/login` session, so no `az` extension install on every scheduled run
+- **A query that errors, 403s or times out fails the run** rather than reporting healthy — the difference between "nothing is wrong" and "nothing ran" is the whole point
+- Outputs `breached`, `findings`, `findings-path`, `deferred-count` and `resolved`
+
+Requires **Monitoring Reader** on the target resource; Key Vault access policies do not cover the telemetry data plane.
+
+### Slack Notify
+
+Post a message to Slack from a workflow, via a bot token (`chat.postMessage`) or an incoming webhook. Jenkins pipelines get this from `cnp-jenkins-library`, which reads the channel from `cnp-jenkins-config/team-config.yml`; GitHub Actions had no equivalent, so repos were hand-rolling `curl` calls.
+
+📖 **[View action documentation](slack-notify/README.md)**
+
+```yaml
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+    steps:
+      - uses: hmcts/cnp-githubactions-library/slack-notify@main
+        with:
+          channel: C0123456789
+          text: ":white_check_mark: Deploy to AAT finished."
+```
+
+**Features:**
+- Bot token or incoming webhook, token taking precedence when both are present
+- Block Kit support, with `text` as the notification fallback
+- Threading: `thread-ts` in, `ts` out, so a resolution message can reply to the original alert
+- Resolves GitHub logins to Slack mentions via [`hmcts/github-slack-user-mappings`](https://github.com/hmcts/github-slack-user-mappings), falling back to a plain `@login` when unmapped
+- Payloads assembled with `jq`, so quotes, newlines and braces in a message cannot break the JSON
+- Treats Slack's `ok: false` as a failure — it arrives with HTTP 200, so a status-code check alone would report success
+- Does not fail the job by default: a notification usually reports on something more important than itself
+- Outputs `delivered` and `ts`
+
+`team-config.yml` is Jenkins-only and is not consulted — pass the channel explicitly.
 
 ## 📖 Usage
 
