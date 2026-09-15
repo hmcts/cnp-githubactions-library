@@ -126,13 +126,15 @@ runs:
           exit 1
         fi
 
-        # Generate output filename by removing .template from the name
-        OUTPUT="${TEMPLATE%.template.yaml}.yaml"
-        OUTPUT="${OUTPUT%.template.yml}.yml"
-        # If no .template was in the name, append .generated
-        if [ "$OUTPUT" == "$TEMPLATE" ]; then
-          OUTPUT="${TEMPLATE%.*}.generated.${TEMPLATE##*.}"
-        fi
+        # Generate output filename by removing .template from the name, or appending
+        # .generated when there is no .template to remove. Matched with case rather
+        # than sequential suffix strips: a strip that does not match appends instead,
+        # so stripping .yaml then .yml gave every input a .yaml.yml suffix.
+        case "$TEMPLATE" in
+          *.template.yaml) OUTPUT="${TEMPLATE%.template.yaml}.yaml" ;;
+          *.template.yml)  OUTPUT="${TEMPLATE%.template.yml}.yml" ;;
+          *)               OUTPUT="${TEMPLATE%.*}.generated.${TEMPLATE##*.}" ;;
+        esac
 
         echo "Processing values template: $TEMPLATE -> $OUTPUT"
         envsubst < "$TEMPLATE" > "$OUTPUT"
