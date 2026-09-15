@@ -15,6 +15,7 @@ A reusable library of GitHub Actions workflows for HMCTS CNP (Cloud Native Platf
   - [Publish OpenAPI Spec](#publish-openapi-spec)
   - [Application Insights Health Check](#application-insights-health-check)
   - [Slack Notify](#slack-notify)
+  - [Renovate Autofix](#renovate-autofix)
 - [Usage](#usage)
 - [Contributing](#contributing)
 - [License](#license)
@@ -467,6 +468,38 @@ jobs:
 - Outputs `delivered` and `ts`
 
 `team-config.yml` is Jenkins-only and is not consulted — pass the channel explicitly.
+
+### Renovate Autofix
+
+When CI fails on a Renovate dependency-update PR, hand the failure to Claude once and push the fix to the branch.
+
+**The workflow ships no instructions.** What a valid fix looks like — the toolchain, the commit convention, what to leave alone — lives in the `prompt` input in the consuming repo. That is the part that cannot be shared; everything around it (resolving the PR, gating, capping attempts, deciding the outcome, pushing safely, reporting) is the same everywhere and is what this provides.
+
+📖 **[View workflow documentation](.github/workflows/renovate-autofix.md)**
+
+```yaml
+jobs:
+  autofix:
+    uses: hmcts/cnp-githubactions-library/.github/workflows/renovate-autofix.yaml@main
+    secrets: inherit
+    with:
+      ci-workflow: workflow.preview.yml
+      prompt: |
+        Run `yarn install --immutable` before any lint or test command.
+        Never widen or pin back the version in package.json.
+        Commit once, do NOT push. Always write /tmp/autofix-report.md.
+```
+
+**Features:**
+- One attempt per PR, claimed before the agent runs, so a crash or timeout cannot loop
+- Outcome decided from `git`, not from what the agent reports it did
+- `--force-with-lease` against the checked-out SHA, so a branch Renovate refreshed mid-run is refused rather than clobbered
+- Reports on the push rather than the fix — a rejected lease never reads as success
+- `skip-when-all-failures-match` drops failures no code change can fix, so attempts are not spent on infrastructure
+- Eligibility decided in one step that logs why it declined
+- Reports into a single updated PR comment rather than one per run
+
+A commit from anyone but Renovate takes the PR out of Renovate's management — no more rebasing, no more automerge — so the report says the PR needs manual review whenever a commit landed.
 
 ## 📖 Usage
 
