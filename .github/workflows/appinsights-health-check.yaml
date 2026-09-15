@@ -71,6 +71,9 @@ on:
       resolved:
         description: 'Fingerprints that were firing and are now clean.'
         value: ${{ jobs.check.outputs.resolved }}
+      skipped:
+        description: 'Whether the run fell outside the config schedule and ran no queries.'
+        value: ${{ jobs.check.outputs.skipped }}
 
 jobs:
   check:
@@ -84,6 +87,7 @@ jobs:
       findings: ${{ steps.check.outputs.findings }}
       deferred-count: ${{ steps.check.outputs.deferred-count }}
       resolved: ${{ steps.check.outputs.resolved }}
+      skipped: ${{ steps.check.outputs.skipped }}
     steps:
       - uses: actions/checkout@v4
 

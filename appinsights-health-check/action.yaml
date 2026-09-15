@@ -58,6 +58,9 @@ outputs:
   resolved:
     description: 'Fingerprints that were firing on a previous run and are now clean, as a JSON array.'
     value: ${{ steps.run.outputs.resolved }}
+  skipped:
+    description: 'Whether the run fell outside the config schedule and ran no queries ("true" or "false").'
+    value: ${{ steps.run.outputs.skipped }}
 
 runs:
   using: 'composite'

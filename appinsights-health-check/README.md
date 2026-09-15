@@ -18,6 +18,7 @@ That split is deliberate:
 - A suppression list in your config, requiring a stated reason for every entry
 - A cap on findings per run, with the remainder counted rather than silently dropped
 - Reports resolution when a previously-firing finding goes clean
+- An optional active schedule, so an environment shut down out of hours does not read as total failure
 - Queries the REST API with a token from your `azure/login` session, so no `az` extension install on every run
 - **A query that errors, 403s or times out fails the run.** It is never reported as healthy — that confusion is the main failure mode this action exists to avoid
 
@@ -115,6 +116,12 @@ defaults:
   severity: medium
   renotify-after: 6h
 
+# Optional. Outside this window no queries run at all.
+schedule:
+  timezone: Europe/London
+  active: '07:00-20:00'
+  days: mon-fri
+
 checks:
   # Any error is worth looking at, so this fires on a single row.
   - id: exceptions
@@ -196,6 +203,23 @@ An entry needs a `fingerprint` and a `reason` — the reason is mandatory, becau
 
 Review them periodically: an entry that has not fired in 90 days is probably hiding something that no longer happens, or something that changed shape.
 
+### Schedule
+
+Non-production environments are commonly shut down out of hours, and a shut-down environment makes every check fire at once: no telemetry looks exactly like total failure. Give the action the window the environment is expected to be up and it runs no queries outside it.
+
+```yaml
+schedule:
+  timezone: Europe/London   # optional, IANA name, defaults to UTC
+  active: '07:00-20:00'     # required
+  days: mon-fri             # optional, defaults to every day
+```
+
+`days` accepts single days, inclusive ranges and comma-separated lists, all wrapping: `mon-fri`, `sat,sun`, `fri-mon`. An `active` range may span midnight (`22:00-06:00`); it is attributed to the day it opened on, so `days: fri` with `active: '22:00-06:00'` covers Friday night into Saturday morning. Naming a zone rather than relying on the runner's clock means the window tracks daylight saving.
+
+A skipped run writes no state. Treating a shutdown as "nothing fired" would mark every open finding resolved and empty the state file, so everything would be re-reported as new the following morning.
+
+The CFT default schedule is 20:00–07:00 weekdays plus the whole weekend, per [Environment schedule](https://hmcts.github.io/cloud-native-platform/environments/auto-shutdown.html). Teams can extend uptime per-day via [auto-shutdown](https://github.com/hmcts/auto-shutdown), so on those days an environment is up while this action is skipping — that costs detection latency out of hours, never a false alert.
+
 ## Inputs
 
 | Input | Required | Default | Description |
@@ -218,6 +242,7 @@ Review them periodically: an entry that has not fired in 90 days is probably hid
 | `findings-path` | Full verdict artefact: every check, query, row count, rule and outcome. |
 | `deferred-count` | Fresh findings that exceeded `max-findings`. |
 | `resolved` | Fingerprints that were firing and are now clean. |
+| `skipped` | `true` when the run fell outside `schedule` and ran no queries. |
 
 ## Notes
 

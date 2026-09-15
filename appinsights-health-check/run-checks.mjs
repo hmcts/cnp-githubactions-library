@@ -336,6 +336,120 @@ for (const entry of config?.suppressions ?? []) {
   suppressions.set(entry.fingerprint, entry.reason);
 }
 
+// ---------------------------------------------------------------------------
+// Active schedule
+//
+// Non-production environments are routinely shut down out of hours. Every check
+// then reports the absence of telemetry as a fault, so the schedule has to be
+// known here rather than worked around in each consumer's queries.
+// ---------------------------------------------------------------------------
+
+const DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+const parseDays = (text) => {
+  const wanted = new Set();
+  for (const piece of String(text).toLowerCase().split(",")) {
+    const part = piece.trim();
+    if (part === "") continue;
+    const range = part.match(/^([a-z]{3})\s*-\s*([a-z]{3})$/);
+    if (!range) {
+      if (!DAY_NAMES.includes(part)) fatal(`schedule.days has an unknown day '${part}'. Use mon, tue … sun.`);
+      wanted.add(part);
+      continue;
+    }
+    const from = DAY_NAMES.indexOf(range[1]);
+    const to = DAY_NAMES.indexOf(range[2]);
+    if (from === -1 || to === -1) fatal(`schedule.days has an unknown day in '${part}'. Use mon, tue … sun.`);
+    // Inclusive and wrapping, so both mon-fri and sat-sun read naturally.
+    for (let i = 0; i < 7; i++) {
+      const day = (from + i) % 7;
+      wanted.add(DAY_NAMES[day]);
+      if (day === to) break;
+    }
+  }
+  if (wanted.size === 0) fatal("schedule.days is empty.");
+  return wanted;
+};
+
+const parseClock = (text) => {
+  const match = String(text).trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) fatal(`schedule.active must be a range like '07:00-20:00', got a bound of '${text}'.`);
+  const hours = Number.parseInt(match[1], 10);
+  const minutes = Number.parseInt(match[2], 10);
+  if (hours > 23 || minutes > 59) fatal(`schedule.active contains an invalid time '${text}'.`);
+  return hours * 60 + minutes;
+};
+
+const scheduleSkipReason = () => {
+  const schedule = config?.schedule;
+  if (!schedule) return null;
+  if (typeof schedule !== "object" || Array.isArray(schedule)) fatal("'schedule' must be a mapping.");
+  const knownKeys = new Set(["timezone", "active", "days"]);
+  for (const key of Object.keys(schedule)) {
+    if (!knownKeys.has(key)) {
+      fatal(`schedule has an unknown key '${key}'. Allowed: ${[...knownKeys].join(", ")}.`);
+    }
+  }
+  if (!schedule.active) fatal("schedule has no 'active'. Expected e.g. active: '07:00-20:00'.");
+
+  const bounds = String(schedule.active).split("-");
+  if (bounds.length !== 2) fatal(`schedule.active must be a range like '07:00-20:00', got '${schedule.active}'.`);
+  const from = parseClock(bounds[0]);
+  const to = parseClock(bounds[1]);
+  if (from === to) fatal("schedule.active begins and ends at the same time, so it would never be active.");
+  const days = schedule.days ? parseDays(schedule.days) : new Set(DAY_NAMES);
+  const timezone = schedule.timezone || "UTC";
+
+  let parts;
+  try {
+    parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone,
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    }).formatToParts(new Date());
+  } catch {
+    fatal(`schedule.timezone '${timezone}' is not a recognised IANA time zone, e.g. Europe/London.`);
+  }
+  const at = (type) => parts.find((part) => part.type === type)?.value ?? "";
+  // Naming the zone rather than trusting the runner's clock is the point: a shutdown
+  // window is expressed in local time and moves with daylight saving.
+  const today = at("weekday").slice(0, 3).toLowerCase();
+  const minuteOfDay = (Number.parseInt(at("hour"), 10) % 24) * 60 + Number.parseInt(at("minute"), 10);
+
+  const withinHours =
+    from < to ? minuteOfDay >= from && minuteOfDay < to : minuteOfDay >= from || minuteOfDay < to;
+  // A window spanning midnight belongs to the day it opened on, so `days` still means
+  // what it appears to mean.
+  const dayOfWindow =
+    from < to || minuteOfDay >= from ? today : DAY_NAMES[(DAY_NAMES.indexOf(today) + 6) % 7];
+
+  if (withinHours && days.has(dayOfWindow)) return null;
+  return (
+    `${at("weekday")} ${at("hour")}:${at("minute")} ${timezone} falls outside the active window ` +
+    `${schedule.active} on ${schedule.days ?? "any day"}`
+  );
+};
+
+const scheduleSkip = scheduleSkipReason();
+if (scheduleSkip) {
+  // State is deliberately left untouched. Treating a shut-down environment as a run
+  // where nothing fired would resolve every open finding and empty the state file,
+  // so everything would be re-reported as new when the environment came back.
+  output("breached", false);
+  output("findings", "[]");
+  output("findings-path", "");
+  output("deferred-count", 0);
+  output("resolved", "[]");
+  output("skipped", true);
+  summary("## Application Insights health check");
+  summary("");
+  summary(`Skipped — ${scheduleSkip}.`);
+  console.log(`appinsights-health-check: skipped, ${scheduleSkip}.`);
+  process.exit(0);
+}
+
 const parseDuration = (text, fallbackMs) => {
   if (!text) return fallbackMs;
   const match = String(text).trim().match(/^(\d+)\s*(m|h|d)$/);
@@ -567,6 +681,7 @@ output("findings", JSON.stringify(emitted));
 output("findings-path", findingsPath);
 output("deferred-count", deferred.length);
 output("resolved", JSON.stringify(resolved));
+output("skipped", false);
 
 // Summary: a clean run has to be auditable too, otherwise "nothing posted" is
 // indistinguishable from "nothing ran".
