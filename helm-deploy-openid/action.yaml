@@ -125,12 +125,11 @@ runs:
         fi
 
         # Generate output filename by removing .template from the name
-        OUTPUT="${TEMPLATE%.template.yaml}.yaml"
-        OUTPUT="${OUTPUT%.template.yml}.yml"
-        # If no .template was in the name, append .generated
-        if [ "$OUTPUT" == "$TEMPLATE" ]; then
-          OUTPUT="${TEMPLATE%.*}.generated.${TEMPLATE##*.}"
-        fi
+        case "$TEMPLATE" in
+          *.template.yaml) OUTPUT="${TEMPLATE%.template.yaml}.yaml" ;;
+          *.template.yml)  OUTPUT="${TEMPLATE%.template.yml}.yml" ;;
+          *)               OUTPUT="${TEMPLATE%.*}.generated.${TEMPLATE##*.}" ;;
+        esac
 
         echo "Processing values template: $TEMPLATE -> $OUTPUT"
         envsubst < "$TEMPLATE" > "$OUTPUT"
