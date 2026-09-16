@@ -67,7 +67,7 @@ on:
         type: number
         default: 40
       allowed-tools:
-        description: "Claude Code --allowedTools value. The default enumerates git subcommands rather than allowing Bash(git:*), so the workflow — not the prompt — is what prevents a push."
+        description: "Claude Code --allowedTools value. The default enumerates git subcommands rather than allowing Bash(git:*). Note the run also passes --dangerously-skip-permissions, which skips permission prompts, so treat this as documenting the intended tool surface rather than as an enforced restriction."
         required: false
         type: string
         default: 'Read,Glob,Grep,Write,Edit,Bash(git status:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git ls-files:*),Bash(git config user.name:*),Bash(git config user.email:*)'
@@ -131,7 +131,7 @@ on:
         description: "Whether the gate allowed an attempt."
         value: ${{ jobs.resolve.outputs.eligible }}
       outcome:
-        description: "fixed, no-change or dirty. Empty when no attempt was made."
+        description: "fixed, no-change, rewritten or dirty. Empty when no attempt was made."
         value: ${{ jobs.autofix.outputs.outcome }}
       pushed:
         description: "true only when a commit reached the branch."
@@ -141,10 +141,17 @@ jobs:
   resolve:
     name: Check Eligibility
     runs-on: ${{ inputs.runs-on }}
+    concurrency:
+      # Serialised with the claim below, so two failures arriving together cannot both
+      # read the label as absent and both go on to run the agent. Keyed on the branch
+      # rather than the PR number, which is not known until this job runs.
+      group: renovate-autofix-${{ github.repository }}-${{ github.event.workflow_run.head_branch || inputs.pr-number }}
+      cancel-in-progress: false
     permissions:
       contents: read
       pull-requests: read
       actions: read
+      issues: write # claims the attempt label
     outputs:
       eligible: ${{ steps.gate.outputs.eligible }}
       number: ${{ steps.pr.outputs.number }}
@@ -287,6 +294,24 @@ jobs:
           echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
           [ "$eligible" = "true" ] && echo "eligible — handing PR #${{ steps.pr.outputs.number }} to Claude" || true
 
+      - name: Claim the attempt
+        # In this job rather than the next, so the gate above and the claim are one
+        # serialised region. Claimed before the agent runs, so a crash or a timeout
+        # still consumes the attempt instead of looping.
+        if: steps.gate.outputs.eligible == 'true'
+        uses: actions/github-script@v9
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+          ATTEMPT_LABEL: ${{ inputs.attempt-label }}
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              ...context.repo,
+              issue_number: Number(process.env.PR),
+              labels: [process.env.ATTEMPT_LABEL],
+            });
+            core.info(`PR #${process.env.PR}: claimed — no further automatic attempts`);
+
   autofix:
     name: Autofix PR #${{ needs.resolve.outputs.number }}
     needs: [resolve]
@@ -294,13 +319,14 @@ jobs:
     runs-on: ${{ inputs.runs-on }}
     concurrency:
       # Not cancel-in-progress: a second failure must not kill an attempt midway
-      # through. It queues, then finds the label already claimed.
+      # through. Eligibility and the claim are serialised in the resolve job, so a
+      # second failure is refused there rather than reaching this job.
       group: renovate-autofix-${{ github.repository }}-pr-${{ needs.resolve.outputs.number }}
       cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
-      issues: write # labels
+      issues: write # comments on the PR
       actions: read # read the failed run's logs
       id-token: write # Bedrock OIDC
     outputs:
@@ -318,7 +344,10 @@ jobs:
           app-id: ${{ secrets.CLAUDE_CODE_APP_ID }}
           private-key: ${{ secrets.CLAUDE_CODE_PRIVATE_KEY }}
           # Scoped down from every permission the App has — Claude runs unattended
-          # with this token in reach.
+          # with this token in reach. Actions is needed to read the failed run's logs,
+          # which a public repository grants any authenticated token but a private one
+          # does not.
+          permission-actions: read
           permission-contents: write
           permission-pull-requests: write
           permission-issues: write
@@ -352,30 +381,24 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Stop the run rather than degrade: the agent is told to diagnose from this
+          # file, and an unreadable log leaves it guessing. This step runs before the
+          # attempt is claimed, so failing here costs nothing and can be retried.
+          if ! gh run view "$RUN_ID" --log-failed > /tmp/ci-failure.raw; then
+            echo "::error::could not read the logs for run ${RUN_ID} — the App token needs Actions: read"
+            exit 1
+          fi
+
           # Keep the tail — the assertion or stack trace is at the end of the log.
-          gh run view "$RUN_ID" --log-failed 2>/dev/null | tail -c 200000 \
-            > /tmp/ci-failure.log || echo "(could not retrieve logs)" > /tmp/ci-failure.log
+          tail -c 200000 /tmp/ci-failure.raw > /tmp/ci-failure.log
+          if [ ! -s /tmp/ci-failure.log ]; then
+            echo "::warning::the failed run reported no job logs, so there is nothing to diagnose from"
+          fi
           wc -l /tmp/ci-failure.log
 
           # Which dependency this PR updates, so Claude can tell breakage caused by
           # the bump from breakage that is unrelated to it.
           echo "subject=$(git log -1 --pretty=%s)" >> "$GITHUB_OUTPUT"
-
-      - name: Claim the attempt
-        # Before Claude runs, not after, so a crash or timeout still consumes the one
-        # attempt.
-        uses: actions/github-script@v9
-        env:
-          ATTEMPT_LABEL: ${{ inputs.attempt-label }}
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            await github.rest.issues.addLabels({
-              ...context.repo,
-              issue_number: Number(process.env.PR),
-              labels: [process.env.ATTEMPT_LABEL],
-            });
-            core.info(`PR #${process.env.PR}: claimed — no further automatic attempts`);
 
       - name: Enable Corepack
         if: inputs.enable-corepack
@@ -438,13 +461,22 @@ jobs:
           set -euo pipefail
 
           # Trust git, not the model's self-report.
-          if [ -n "$(git status --porcelain)" ]; then
+          # Untracked files are excluded: install, build and test all run in this tree
+          # and leave residue that is not the agent's work, which would otherwise read
+          # as an unfinished fix.
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
             # Uncommitted changes mean it stopped partway — pushing would ship half
             # a fix.
             state=dirty
             git status --short
           elif [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]; then
             state=no-change
+          elif ! git merge-base --is-ancestor "$HEAD_SHA" HEAD; then
+            # HEAD moved, but not forward: an amend, a rebase or a reset. The lease
+            # still matches the remote, so a push would succeed and silently drop the
+            # update the PR exists to make.
+            state=rewritten
+            git log --oneline -3
           else
             state=fixed
             git log --oneline "$HEAD_SHA"..HEAD
@@ -454,7 +486,10 @@ jobs:
 
       - name: Push the fix
         id: push
-        if: ${{ steps.outcome.outputs.state == 'fixed' }}
+        # always(), because a commit made before the agent hit a timeout, a throttle or
+        # its turn limit is still a valid fix. Without it the implicit success() drops
+        # that commit and the run reports a push that was never attempted.
+        if: ${{ always() && steps.outcome.outputs.state == 'fixed' }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -478,6 +513,7 @@ jobs:
         env:
           STATE: ${{ steps.outcome.outputs.state }}
           PUSHED: ${{ steps.push.outputs.pushed }}
+          PUSH_OUTCOME: ${{ steps.push.outcome }}
           FAILED_JOBS: ${{ needs.resolve.outputs.failed-jobs }}
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
           ATTEMPT_LABEL: ${{ inputs.attempt-label }}
@@ -495,7 +531,10 @@ jobs:
             // Report on the push, not the fix: a lease rejection leaves the branch
             // exactly as it was and must not read as success.
             const pushed = process.env.PUSHED === 'true';
-            const wouldPush = state === 'fixed' && !pushed;
+            // Distinguishes a lease the remote refused from a push that never ran,
+            // which read identically when only `pushed` was consulted.
+            const pushRejected = state === 'fixed' && !pushed
+              && process.env.PUSH_OUTCOME === 'failure';
 
             let report = '';
             try { report = fs.readFileSync('/tmp/autofix-report.md', 'utf8').trim(); }
@@ -507,17 +546,21 @@ jobs:
 
             const heading = pushed
               ? '## 🤖 Autofix pushed'
-              : crashed
-                ? '## ⚠️ Autofix did not complete'
-                : state === 'no-change'
-                  ? '## 🤖 Autofix made no changes'
-                  : state === 'fixed'
-                    ? '## ⚠️ Autofix produced a fix but could not push it'
-                    : '## ⚠️ Autofix stopped partway';
+              : state === 'rewritten'
+                ? '## ⚠️ Autofix rewrote history and was not pushed'
+                : crashed
+                  ? '## ⚠️ Autofix did not complete'
+                  : state === 'no-change'
+                    ? '## 🤖 Autofix made no changes'
+                    : state === 'fixed'
+                      ? '## ⚠️ Autofix produced a fix but could not push it'
+                      : '## ⚠️ Autofix stopped partway';
 
-            const why = wouldPush
+            const why = pushRejected
               ? '\nThe push was rejected — the branch moved while Claude was working, so it has been left alone. Its head no longer matches what was fixed.'
-              : null;
+              : state === 'rewritten'
+                ? '\nThe commit history was rewritten rather than added to, so the head is not a descendant of what was reviewed. Pushing would have discarded the update this PR makes, so nothing was pushed.'
+                : null;
 
             const footer = [
               // Only when a commit landed — otherwise the PR is still the bot's.
@@ -556,7 +599,7 @@ jobs:
       - name: Fail on an incomplete attempt
         # A dirty tree or rejected push is worth a red run; no-change is a legitimate
         # outcome and stays green.
-        if: ${{ steps.outcome.outputs.state == 'dirty' || (steps.outcome.outputs.state == 'fixed' && steps.push.outputs.pushed != 'true') }}
+        if: ${{ always() && (steps.outcome.outputs.state == 'dirty' || steps.outcome.outputs.state == 'rewritten' || (steps.outcome.outputs.state == 'fixed' && steps.push.outputs.pushed != 'true')) }}
         run: |
           echo "::error::autofix did not complete cleanly (state=${{ steps.outcome.outputs.state }}, pushed=${{ steps.push.outputs.pushed || 'false' }})"
           exit 1

@@ -9,10 +9,10 @@ The workflow ships no instructions. What a valid fix looks like in your reposito
 ## Features
 
 - Resolves the PR from a `workflow_run` event, with a branch lookup for when the event's `pull_requests` array comes through empty
-- One attempt per PR, claimed **before** the agent runs, so a crash or timeout cannot loop
-- Decides the outcome from `git`, not from what the agent says it did
+- One attempt per PR, claimed **before** the agent runs and inside the same serialised region as the eligibility gate, so a crash, a timeout or two failures arriving together cannot produce a second attempt
+- Decides the outcome from `git`, not from what the agent says it did, and refuses to push a rewritten history
 - Pushes with `--force-with-lease` against the checked-out SHA, so a branch Renovate refreshed mid-run is refused rather than clobbered
-- Reports on the push rather than the fix — a rejected lease never reads as success
+- Reports on the push rather than the fix — a rejected lease never reads as success, and is distinguished from a push that never ran
 - Skips failures no code change can fix, via `skip-when-all-failures-match`
 - Reports into a single updated PR comment rather than a new one per run
 
@@ -30,7 +30,7 @@ The workflow ships no instructions. What a valid fix looks like in your reposito
 
 ## Prerequisites
 
-**A GitHub App** whose id and private key are available as secrets. It needs `contents: write`, `pull-requests: write` and `issues: write` on the repository. The workflow scopes the generated token down to exactly those three, because the agent runs unattended with that token within reach.
+**A GitHub App** whose id and private key are available as secrets. It needs `actions: read`, `contents: write`, `pull-requests: write` and `issues: write` on the repository. The workflow scopes the generated token down to exactly those four, because the agent runs unattended with that token within reach. `actions: read` is what reads the failed run's logs: a public repository grants that to any authenticated token, a private one does not.
 
 **Bedrock access** via the shared `HMCTSClaudeGitHubActionsRole`, which the default `aws-role` points at. The calling job must grant `id-token: write` or the OIDC exchange fails.
 
@@ -142,7 +142,7 @@ jobs:
 |--------|-------------|
 | `pr-number` | PR resolved, whether or not it was attempted |
 | `eligible` | Whether the gate allowed an attempt |
-| `outcome` | `fixed`, `no-change` or `dirty`; empty when no attempt was made |
+| `outcome` | `fixed`, `no-change`, `rewritten` or `dirty`; empty when no attempt was made |
 | `pushed` | `true` only when a commit reached the branch |
 
 ## Notes
@@ -153,6 +153,10 @@ jobs:
 
 **One attempt, claimed up front.** The label goes on before the agent starts, so a throttle, a timeout or a `max-turns` stop consumes it. Remove the label to allow one more. Without this a repeatedly-failing pipeline would re-run the agent on every push.
 
+The claim sits in the eligibility job, under a `concurrency` group keyed on the branch, so reading the label and setting it are one serialised region. Claiming in the second job instead would let two failures arriving within a minute of each other both read the label as absent and both go on to run the agent.
+
 **Eligibility is decided in one place.** All the gates live in a single step in the `resolve` job so they cannot drift apart, and each one logs why it declined. When nothing happened, that job's log says which condition failed.
+
+**An unreadable log stops the run.** The agent is told to diagnose from the failed run's log, so a log it cannot read would leave it guessing. That step runs before the attempt is claimed, so failing there costs nothing and the run can simply be retried.
 
 **`workflow_run` only ever runs the default-branch copy of the calling workflow.** Edits to the caller do nothing until merged, which is why the manual `workflow_dispatch` path is worth wiring up.

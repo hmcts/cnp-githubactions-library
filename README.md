@@ -491,8 +491,8 @@ jobs:
 ```
 
 **Features:**
-- One attempt per PR, claimed before the agent runs, so a crash or timeout cannot loop
-- Outcome decided from `git`, not from what the agent reports it did
+- One attempt per PR, claimed before the agent runs and serialised with the eligibility gate, so a crash, a timeout or two failures at once cannot produce a second attempt
+- Outcome decided from `git`, not from what the agent reports it did, and a rewritten history is refused rather than force-pushed
 - `--force-with-lease` against the checked-out SHA, so a branch Renovate refreshed mid-run is refused rather than clobbered
 - Reports on the push rather than the fix — a rejected lease never reads as success
 - `skip-when-all-failures-match` drops failures no code change can fix, so attempts are not spent on infrastructure
