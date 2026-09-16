@@ -1,0 +1,605 @@
+name: Renovate Autofix
+
+on:
+  workflow_call:
+    inputs:
+      prompt:
+        description: "Instructions for Claude. Appended to a generated context block naming the repo, PR, branch, update and failed jobs. Put repository conventions here — the toolchain, what a valid fix looks like, what to leave alone."
+        required: true
+        type: string
+      ci-workflow:
+        description: "Filename of the workflow whose failure is being diagnosed, e.g. workflow.preview.yml. Used to find the latest failed run when dispatched manually."
+        required: true
+        type: string
+      pr-number:
+        description: "PR to attempt, for manual runs. Leave unset when triggered by workflow_run — the PR is resolved from the event."
+        required: false
+        type: string
+        default: ''
+      base-branch:
+        description: "Only attempt PRs targeting this branch."
+        required: false
+        type: string
+        default: master
+      renovate-author:
+        description: "Login of the bot whose PRs are eligible. Matched against the REST author, not the branch prefix."
+        required: false
+        type: string
+        default: 'renovate[bot]'
+      allowed-bots:
+        description: "Passed to claude-code-action as allowed_bots, which otherwise refuses a non-human triggering actor. Note this is the bot's short name, not the PR author login."
+        required: false
+        type: string
+        default: renovate
+      attempt-label:
+        description: "Label claimed before Claude runs, to cap this at one attempt per PR. Remove it from a PR to allow another."
+        required: false
+        type: string
+        default: 'claude:autofix-attempted'
+      skip-when-all-failures-match:
+        description: "Regex. When every failed job name matches it, the run is skipped. Use for failures no code change can fix — a deploy against an environment that is switched off, say."
+        required: false
+        type: string
+        default: ''
+      node-version-file:
+        description: "Passed to actions/setup-node. Set to an empty string to skip Node setup entirely."
+        required: false
+        type: string
+        default: .nvmrc
+      cache:
+        description: "Passed to actions/setup-node as cache. Empty string disables caching."
+        required: false
+        type: string
+        default: yarn
+      cache-dependency-path:
+        description: "Passed to actions/setup-node as cache-dependency-path."
+        required: false
+        type: string
+        default: '**/yarn.lock'
+      enable-corepack:
+        description: "Run corepack enable before Node setup, for repos pinning a packageManager."
+        required: false
+        type: boolean
+        default: true
+      max-turns:
+        description: "Turn limit for the agent. A stop here lands as no-change and is reported as an incomplete attempt."
+        required: false
+        type: number
+        default: 40
+      allowed-tools:
+        description: "Claude Code --allowedTools value. The default enumerates git subcommands rather than allowing Bash(git:*). Note the run also passes --dangerously-skip-permissions, which skips permission prompts, so treat this as documenting the intended tool surface rather than as an enforced restriction."
+        required: false
+        type: string
+        default: 'Read,Glob,Grep,Write,Edit,Bash(git status:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git rev-parse:*),Bash(git rev-list:*),Bash(git ls-files:*),Bash(git config user.name:*),Bash(git config user.email:*)'
+      extra-allowed-tools:
+        description: "Appended to allowed-tools. Use this for the build tooling a fix needs, e.g. Bash(corepack:*),Bash(yarn:*)."
+        required: false
+        type: string
+        default: ''
+      commit-author-name:
+        description: "Author name on the fix commit."
+        required: false
+        type: string
+        default: 'claude-code-bot[bot]'
+      commit-author-email:
+        description: "Author email on the fix commit."
+        required: false
+        type: string
+        default: 'claude-code-bot[bot]@users.noreply.github.com'
+      aws-role:
+        description: "Role assumed for Bedrock access."
+        required: false
+        type: string
+        default: 'arn:aws:iam::313941174580:role/HMCTSClaudeGitHubActionsRole'
+      aws-region:
+        description: "Region for Bedrock."
+        required: false
+        type: string
+        default: eu-west-1
+      opus-model:
+        description: "Bedrock model id for Opus."
+        required: false
+        type: string
+        default: 'eu.anthropic.claude-opus-5'
+      sonnet-model:
+        description: "Bedrock model id for Sonnet."
+        required: false
+        type: string
+        default: 'eu.anthropic.claude-sonnet-5'
+      haiku-model:
+        description: "Bedrock model id for Haiku."
+        required: false
+        type: string
+        default: 'eu.anthropic.claude-haiku-4-5-20251001-v1:0'
+      runs-on:
+        description: "Runner label for both jobs."
+        required: false
+        type: string
+        default: ubuntu-latest
+    secrets:
+      CLAUDE_CODE_APP_ID:
+        description: "App id of the GitHub App that commits and comments."
+        required: true
+      CLAUDE_CODE_PRIVATE_KEY:
+        description: "Private key for that App."
+        required: true
+    outputs:
+      pr-number:
+        description: "PR that was resolved, whether or not it was attempted."
+        value: ${{ jobs.resolve.outputs.number }}
+      eligible:
+        description: "Whether the gate allowed an attempt."
+        value: ${{ jobs.resolve.outputs.eligible }}
+      outcome:
+        description: "fixed, no-change, rewritten or dirty. Empty when no attempt was made."
+        value: ${{ jobs.autofix.outputs.outcome }}
+      pushed:
+        description: "true only when a commit reached the branch."
+        value: ${{ jobs.autofix.outputs.pushed }}
+
+jobs:
+  resolve:
+    name: Check Eligibility
+    runs-on: ${{ inputs.runs-on }}
+    concurrency:
+      # Serialised with the claim below, so two failures arriving together cannot both
+      # read the label as absent and both go on to run the agent. Keyed on the branch
+      # rather than the PR number, which is not known until this job runs.
+      group: renovate-autofix-${{ github.repository }}-${{ github.event.workflow_run.head_branch || inputs.pr-number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      issues: write # claims the attempt label
+    outputs:
+      eligible: ${{ steps.gate.outputs.eligible }}
+      number: ${{ steps.pr.outputs.number }}
+      head-ref: ${{ steps.pr.outputs.head-ref }}
+      head-sha: ${{ steps.pr.outputs.head-sha }}
+      run-id: ${{ steps.pr.outputs.run-id }}
+      failed-jobs: ${{ steps.pr.outputs.failed-jobs }}
+    steps:
+      - name: Resolve the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_PR: ${{ inputs.pr-number }}
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+          SKIP_PATTERN: ${{ inputs.skip-when-all-failures-match }}
+          ATTEMPT_LABEL: ${{ inputs.attempt-label }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # A JSON array, so it comes through the environment, not interpolation.
+          RUN_PRS: ${{ toJson(github.event.workflow_run.pull_requests) }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$INPUT_PR" ]; then
+            number="$INPUT_PR"
+            # No triggering run — the failed one is looked up below, once the branch
+            # is known.
+            run_id=""
+          else
+            # pull_requests is empty often enough that the branch lookup below has to
+            # be there as a fallback.
+            # Guarded on type: the payload is absent, and toJson renders null, whenever
+            # the caller was not triggered by workflow_run.
+            number=$(jq -r 'if type == "array" then (first(.[].number) // empty) else empty end' \
+              <<<"${RUN_PRS:-null}")
+            if [ -z "$number" ] && [ -n "${RUN_BRANCH:-}" ]; then
+              number=$(gh pr list --state open --head "$RUN_BRANCH" --limit 1 \
+                --json number --jq 'first(.[].number) // empty')
+            fi
+            run_id="${RUN_ID:-}"
+          fi
+
+          if [ -z "$number" ]; then
+            echo "no open PR found for branch '${RUN_BRANCH:-}' — nothing to do"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          gh pr view "$number" \
+            --json number,headRefName,headRefOid,isCrossRepository,state,baseRefName,labels \
+            > /tmp/pr.json
+          cat /tmp/pr.json
+
+          head_ref=$(jq -r .headRefName /tmp/pr.json)
+
+          # REST, not gh pr view --json author: the GraphQL-backed field renders an App
+          # author as 'app/renovate', so a 'renovate[bot]' comparison never matches.
+          author=$(gh api "repos/${GH_REPO}/pulls/${number}" --jq .user.login)
+          echo "author: $author"
+
+          if [ -z "$run_id" ]; then
+            run_id=$(gh run list --workflow "$CI_WORKFLOW" --branch "$head_ref" \
+              --status failure --limit 1 --json databaseId \
+              --jq 'first(.[].databaseId) // empty')
+            echo "latest failed $CI_WORKFLOW run for $head_ref: ${run_id:-none}"
+          fi
+
+          # Which jobs failed decides both eligibility below and what Claude is told.
+          failed_jobs='[]'
+          if [ -n "$run_id" ]; then
+            failed_jobs=$(gh run view "$run_id" --json jobs \
+              --jq '[.jobs[] | select(.conclusion == "failure") | .name]')
+          fi
+          echo "failed jobs: $failed_jobs"
+
+          skip=false
+          if [ -n "$SKIP_PATTERN" ]; then
+            total=$(jq 'length' <<<"$failed_jobs")
+            matched=$(jq --arg p "$SKIP_PATTERN" \
+              '[.[] | select(test($p))] | length' <<<"$failed_jobs")
+            # Only when something failed and all of it matched. A run reporting no
+            # failed jobs is not a match, and is left to the gate below.
+            if [ "$total" -gt 0 ] && [ "$total" = "$matched" ]; then
+              skip=true
+            fi
+          fi
+
+          {
+            echo "found=true"
+            echo "number=$number"
+            echo "head-ref=$head_ref"
+            echo "head-sha=$(jq -r .headRefOid /tmp/pr.json)"
+            echo "run-id=$run_id"
+            echo "author=$author"
+            echo "state=$(jq -r .state /tmp/pr.json)"
+            echo "base=$(jq -r .baseRefName /tmp/pr.json)"
+            echo "fork=$(jq -r .isCrossRepository /tmp/pr.json)"
+            echo "labelled=$(jq -r --arg l "$ATTEMPT_LABEL" '[.labels[].name] | contains([$l])' /tmp/pr.json)"
+            echo "failed-jobs=$(jq -r 'join(", ")' <<<"$failed_jobs")"
+            echo "skip=$skip"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to attempt a fix
+        id: gate
+        env:
+          FOUND: ${{ steps.pr.outputs.found }}
+          MANUAL: ${{ inputs.pr-number }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          AUTHOR: ${{ steps.pr.outputs.author }}
+          EXPECTED_AUTHOR: ${{ inputs.renovate-author }}
+          STATE: ${{ steps.pr.outputs.state }}
+          BASE: ${{ steps.pr.outputs.base }}
+          EXPECTED_BASE: ${{ inputs.base-branch }}
+          IS_FORK: ${{ steps.pr.outputs.fork }}
+          LABELLED: ${{ steps.pr.outputs.labelled }}
+          ATTEMPT_LABEL: ${{ inputs.attempt-label }}
+          RUN_ID: ${{ steps.pr.outputs.run-id }}
+          SKIP: ${{ steps.pr.outputs.skip }}
+          SKIP_PATTERN: ${{ inputs.skip-when-all-failures-match }}
+        run: |
+          set -euo pipefail
+
+          # Single place that gates the autofix job, so the conditions cannot drift.
+          eligible=true
+          note() { eligible=false; echo "$1"; }
+
+          [ "$FOUND" = "true" ] || note "no PR resolved"
+          [ -n "$MANUAL" ] || [ "$CONCLUSION" = "failure" ] \
+            || note "the triggering run concluded '$CONCLUSION' — only failures are attempted"
+          [ "$AUTHOR" = "$EXPECTED_AUTHOR" ] || note "PR author is '$AUTHOR', not $EXPECTED_AUTHOR"
+          [ "$STATE" = "OPEN" ] || note "PR is $STATE"
+          [ "$BASE" = "$EXPECTED_BASE" ] || note "PR targets '$BASE', not $EXPECTED_BASE"
+          [ "$IS_FORK" != "true" ] || note "PR is from a fork — the app token cannot push to fork heads"
+          [ "$LABELLED" != "true" ] || note "already attempted ($ATTEMPT_LABEL present) — not retrying"
+          [ -n "$RUN_ID" ] || note "no failed run found to diagnose"
+          [ "$SKIP" != "true" ] \
+            || note "every failed job matches '$SKIP_PATTERN' — no code change can fix this"
+
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
+          [ "$eligible" = "true" ] && echo "eligible — handing PR #${{ steps.pr.outputs.number }} to Claude" || true
+
+      - name: Claim the attempt
+        # In this job rather than the next, so the gate above and the claim are one
+        # serialised region. Claimed before the agent runs, so a crash or a timeout
+        # still consumes the attempt instead of looping.
+        if: steps.gate.outputs.eligible == 'true'
+        uses: actions/github-script@v9
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+          ATTEMPT_LABEL: ${{ inputs.attempt-label }}
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              ...context.repo,
+              issue_number: Number(process.env.PR),
+              labels: [process.env.ATTEMPT_LABEL],
+            });
+            core.info(`PR #${process.env.PR}: claimed — no further automatic attempts`);
+
+  autofix:
+    name: Autofix PR #${{ needs.resolve.outputs.number }}
+    needs: [resolve]
+    if: needs.resolve.outputs.eligible == 'true'
+    runs-on: ${{ inputs.runs-on }}
+    concurrency:
+      # Not cancel-in-progress: a second failure must not kill an attempt midway
+      # through. Eligibility and the claim are serialised in the resolve job, so a
+      # second failure is refused there rather than reaching this job.
+      group: renovate-autofix-${{ github.repository }}-pr-${{ needs.resolve.outputs.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write # comments on the PR
+      actions: read # read the failed run's logs
+      id-token: write # Bedrock OIDC
+    outputs:
+      outcome: ${{ steps.outcome.outputs.state }}
+      pushed: ${{ steps.push.outputs.pushed }}
+    env:
+      PR: ${{ needs.resolve.outputs.number }}
+      HEAD_REF: ${{ needs.resolve.outputs.head-ref }}
+      HEAD_SHA: ${{ needs.resolve.outputs.head-sha }}
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.CLAUDE_CODE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_CODE_PRIVATE_KEY }}
+          # Scoped down from every permission the App has — Claude runs unattended
+          # with this token in reach. Actions is needed to read the failed run's logs,
+          # which a public repository grants any authenticated token but a private one
+          # does not.
+          permission-actions: read
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
+      - name: Checkout PR head
+        uses: actions/checkout@v7
+        with:
+          # By SHA, not branch name — the push below leases against this exact commit.
+          ref: ${{ needs.resolve.outputs.head-sha }}
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+          # Otherwise the token lands in .git/config, where Claude could read it. The
+          # push below puts it on the remote URL for that one command instead.
+          persist-credentials: false
+
+      - name: Configure Git
+        env:
+          AUTHOR_NAME: ${{ inputs.commit-author-name }}
+          AUTHOR_EMAIL: ${{ inputs.commit-author-email }}
+        run: |
+          git config user.name "$AUTHOR_NAME"
+          git config user.email "$AUTHOR_EMAIL"
+          git checkout -B "$HEAD_REF"
+
+      - name: Collect the failure
+        id: failure
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ needs.resolve.outputs.run-id }}
+        run: |
+          set -euo pipefail
+
+          # Stop the run rather than degrade: the agent is told to diagnose from this
+          # file, and an unreadable log leaves it guessing. This step runs before the
+          # attempt is claimed, so failing here costs nothing and can be retried.
+          if ! gh run view "$RUN_ID" --log-failed > /tmp/ci-failure.raw; then
+            echo "::error::could not read the logs for run ${RUN_ID} — the App token needs Actions: read"
+            exit 1
+          fi
+
+          # Keep the tail — the assertion or stack trace is at the end of the log.
+          tail -c 200000 /tmp/ci-failure.raw > /tmp/ci-failure.log
+          if [ ! -s /tmp/ci-failure.log ]; then
+            echo "::warning::the failed run reported no job logs, so there is nothing to diagnose from"
+          fi
+          wc -l /tmp/ci-failure.log
+
+          # Which dependency this PR updates, so Claude can tell breakage caused by
+          # the bump from breakage that is unrelated to it.
+          echo "subject=$(git log -1 --pretty=%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Enable Corepack
+        if: inputs.enable-corepack
+        run: corepack enable
+
+      - name: Setup Node.js
+        if: inputs.node-version-file != ''
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: ${{ inputs.node-version-file }}
+          cache: ${{ inputs.cache }}
+          cache-dependency-path: ${{ inputs.cache-dependency-path }}
+
+      # Dependency installation is deliberately NOT a step. The update under diagnosis
+      # is often what breaks install, and a step can only report that secondhand — run
+      # by Claude, the error is in its own terminal, where it can read it and act on it.
+      # Tell it what to run in the prompt input.
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ inputs.aws-role }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Run Claude Code - Autofix
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        env:
+          ANTHROPIC_DEFAULT_OPUS_MODEL: ${{ inputs.opus-model }}
+          ANTHROPIC_DEFAULT_SONNET_MODEL: ${{ inputs.sonnet-model }}
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: ${{ inputs.haiku-model }}
+        with:
+          use_bedrock: "true"
+          github_token: ${{ steps.app-token.outputs.token }}
+          # The triggering actor is the bot that opened the PR, and the action refuses
+          # non-human actors by default. Only that one is listed — not '*' — so the
+          # prompt stays the only thing that can drive this job.
+          allowed_bots: ${{ inputs.allowed-bots }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR: ${{ env.PR }}
+            BRANCH: ${{ env.HEAD_REF }}
+            UPDATE: ${{ steps.failure.outputs.subject }}
+            FAILED JOBS: ${{ needs.resolve.outputs.failed-jobs }}
+
+            Read /tmp/ci-failure.log first — it is the tail of the failed jobs' logs.
+            Diagnose from it before changing anything.
+
+            ${{ inputs.prompt }}
+          claude_args: |
+            --dangerously-skip-permissions
+            --max-turns ${{ inputs.max-turns }}
+            --append-system-prompt "You are fixing a failing dependency-update PR in a GitHub Action with no human present. Do not ask questions — nobody can answer; stop and write the report instead. Never push, never use --force, never revert the dependency update. Changing nothing is preferable to guessing. Always write /tmp/autofix-report.md."
+            --allowedTools "${{ inputs.allowed-tools }}${{ inputs.extra-allowed-tools && ',' || '' }}${{ inputs.extra-allowed-tools }}"
+
+      - name: Determine outcome
+        id: outcome
+        if: always()
+        run: |
+          set -euo pipefail
+
+          # Trust git, not the model's self-report.
+          # Untracked files are excluded: install, build and test all run in this tree
+          # and leave residue that is not the agent's work, which would otherwise read
+          # as an unfinished fix.
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            # Uncommitted changes mean it stopped partway — pushing would ship half
+            # a fix.
+            state=dirty
+            git status --short
+          elif [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]; then
+            state=no-change
+          elif ! git merge-base --is-ancestor "$HEAD_SHA" HEAD; then
+            # HEAD moved, but not forward: an amend, a rebase or a reset. The lease
+            # still matches the remote, so a push would succeed and silently drop the
+            # update the PR exists to make.
+            state=rewritten
+            git log --oneline -3
+          else
+            state=fixed
+            git log --oneline "$HEAD_SHA"..HEAD
+          fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "Outcome: $state"
+
+      - name: Push the fix
+        id: push
+        # always(), because a commit made before the agent hit a timeout, a throttle or
+        # its turn limit is still a valid fix. Without it the implicit success() drops
+        # that commit and the run reports a push that was never attempted.
+        if: ${{ always() && steps.outcome.outputs.state == 'fixed' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Leased against the checked-out SHA, so a branch the bot refreshed mid-run
+          # is refused rather than clobbered. The explicit <ref>:<oid> form matters —
+          # the bare form leases against the local remote-tracking ref and silently
+          # degrades to a plain --force after any fetch.
+          git push --force-with-lease="refs/heads/${HEAD_REF}:${HEAD_SHA}" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" \
+            "HEAD:refs/heads/${HEAD_REF}"
+
+          # Read by the report step, which must not claim success on a rejected push.
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Report on PR
+        if: always()
+        uses: actions/github-script@v9
+        env:
+          STATE: ${{ steps.outcome.outputs.state }}
+          PUSHED: ${{ steps.push.outputs.pushed }}
+          PUSH_OUTCOME: ${{ steps.push.outcome }}
+          FAILED_JOBS: ${{ needs.resolve.outputs.failed-jobs }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          ATTEMPT_LABEL: ${{ inputs.attempt-label }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const MARKER = '<!-- renovate-autofix -->';
+            const { owner, repo } = context.repo;
+            const pr = Number(process.env.PR);
+            const state = process.env.STATE;
+            const runUrl =
+              `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+
+            // Report on the push, not the fix: a lease rejection leaves the branch
+            // exactly as it was and must not read as success.
+            const pushed = process.env.PUSHED === 'true';
+            // Distinguishes a lease the remote refused from a push that never ran,
+            // which read identically when only `pushed` was consulted.
+            const pushRejected = state === 'fixed' && !pushed
+              && process.env.PUSH_OUTCOME === 'failure';
+
+            let report = '';
+            try { report = fs.readFileSync('/tmp/autofix-report.md', 'utf8').trim(); }
+            catch { report = '_No report was produced._'; }
+
+            // A throttle, timeout or max-turns stop also leaves the tree at
+            // no-change, which must not read as a considered decision.
+            const crashed = process.env.CLAUDE_OUTCOME !== 'success';
+
+            const heading = pushed
+              ? '## 🤖 Autofix pushed'
+              : state === 'rewritten'
+                ? '## ⚠️ Autofix rewrote history and was not pushed'
+                : crashed
+                  ? '## ⚠️ Autofix did not complete'
+                  : state === 'no-change'
+                    ? '## 🤖 Autofix made no changes'
+                    : state === 'fixed'
+                      ? '## ⚠️ Autofix produced a fix but could not push it'
+                      : '## ⚠️ Autofix stopped partway';
+
+            const why = pushRejected
+              ? '\nThe push was rejected — the branch moved while Claude was working, so it has been left alone. Its head no longer matches what was fixed.'
+              : state === 'rewritten'
+                ? '\nThe commit history was rewritten rather than added to, so the head is not a descendant of what was reviewed. Pushing would have discarded the update this PR makes, so nothing was pushed.'
+                : null;
+
+            const footer = [
+              // Only when a commit landed — otherwise the PR is still the bot's.
+              pushed
+                ? 'ℹ️ **This PR now needs manual review and merge.** It carries a commit that is not Renovate\'s, so Renovate will no longer rebase, update or automerge it.'
+                : null,
+              `_Autofix runs once per PR. Remove the \`${process.env.ATTEMPT_LABEL}\` label to allow one more attempt._`,
+            ].filter(l => l !== null);
+
+            const body = [
+              MARKER,
+              heading,
+              '',
+              `The pipeline failed${process.env.FAILED_JOBS ? ` in **${process.env.FAILED_JOBS}**` : ''}. [View the run](${runUrl}).`,
+              why,
+              '',
+              '---',
+              '',
+              report,
+              // Suppress the rule when there is no footer to separate.
+              ...(footer.length ? ['', '---', '', ...footer] : []),
+            ].filter(l => l !== null).join('\n');
+
+            const comments = await github.paginate(github.rest.issues.listComments,
+              { owner, repo, issue_number: pr, per_page: 100 });
+            const existing = comments.find(c => c.body?.includes(MARKER));
+
+            if (existing) {
+              await github.rest.issues.updateComment(
+                { owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment(
+                { owner, repo, issue_number: pr, body });
+            }
+
+      - name: Fail on an incomplete attempt
+        # A dirty tree or rejected push is worth a red run; no-change is a legitimate
+        # outcome and stays green.
+        if: ${{ always() && (steps.outcome.outputs.state == 'dirty' || steps.outcome.outputs.state == 'rewritten' || (steps.outcome.outputs.state == 'fixed' && steps.push.outputs.pushed != 'true')) }}
+        run: |
+          echo "::error::autofix did not complete cleanly (state=${{ steps.outcome.outputs.state }}, pushed=${{ steps.push.outputs.pushed || 'false' }})"
+          exit 1
