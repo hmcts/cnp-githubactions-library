@@ -111,6 +111,8 @@ jobs:
 | `set-string` | Set STRING values (newline-delimited key=value) | No | - |
 | `timeout` | Time to wait for operations | No | `5m0s` |
 | `dry-run` | Simulate deployment | No | `false` |
+| `recover-stuck-release` | Roll back or uninstall a release left in a pending state by an interrupted deploy, before upgrading | No | `true` |
+| `recovery-timeout` | Time to wait for that rollback or uninstall | No | `4m` |
 | `oci-registry` | OCI registry URL (overrides secret) | No | - |
 | `oci-username` | OCI username (overrides secret) | No | - |
 | `oci-password` | OCI password (overrides secret) | No | - |
@@ -135,6 +137,7 @@ jobs:
 | `release-revision` | Helm release revision number |
 | `release-status` | Status of the Helm release |
 | `deployment-time` | Time taken for the deployment |
+| `recovery` | What the stuck-release recovery did, if anything: `rollback`, `uninstall`, or empty |
 
 ## Using Outputs
 
@@ -160,6 +163,44 @@ jobs:
           echo "Deployed revision: ${{ needs.deploy.outputs.release-revision }}"
           echo "Status: ${{ needs.deploy.outputs.release-status }}"
 ```
+
+## Recovering a stuck release
+
+The deploy runs `helm upgrade --install --atomic`. If that is interrupted, by a
+cancelled workflow or by the job hitting its own `timeout-minutes`, Helm never
+finishes and the release is left in `pending-upgrade`. Every later deploy then
+fails with:
+
+```
+another operation (install/upgrade/rollback) is in progress
+```
+
+and stays broken until someone clears it by hand.
+
+Before upgrading, this action checks for that state and clears it:
+
+- If the release is in `pending-install`, `pending-upgrade` or `pending-rollback`
+  and there is more than one revision, it runs `helm rollback` to the last good
+  revision.
+- If there is only one revision there is no good state to return to, so it
+  uninstalls instead. That case means the release never installed successfully.
+- Otherwise it does nothing.
+
+Set `recover-stuck-release: false` to skip the check and let the deploy fail.
+The `recovery` output reports what happened, so a caller can react to a deploy
+that was preceded by an uninstall.
+
+The uninstall deliberately does not pass `--wait`. Azure Service Operator
+resources such as blob services and flexible-server databases sit in
+`Terminating` for minutes, and waiting on them achieves nothing: the release
+secret that blocks the next upgrade has already gone.
+
+### Give the job enough time
+
+Set the calling job's `timeout-minutes` higher than the `timeout` you pass here
+plus the `recovery-timeout`. Otherwise the job can be killed part-way through the
+upgrade, which produces exactly the pending state this recovery exists to clean
+up, on every run.
 
 ## Related Resources
 
