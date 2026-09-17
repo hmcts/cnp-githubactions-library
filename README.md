@@ -57,8 +57,18 @@ sensitive is passed as an input or set as job-level `env`.
 | Integration with other actions | ❌ | ✅ |
 | Matrix strategy | ❌ | ✅ |
 
-Where a thing exists in both forms the underlying logic is the same, so this is
-a question of how much control you need, not of capability.
+Where a thing exists in both forms, the composite action holds the logic and the
+reusable workflow is a single job that calls it. So the two are never out of
+step, and choosing between them is a question of how much control you need
+rather than of capability.
+
+That also explains why the table has gaps. `renovate-autofix` and `label-check`
+are workflows only because they span two jobs, and `renovate-autofix` needs
+`concurrency` and its own `permissions` on each of them; a composite action
+cannot declare any of those. `terraform-fmt` and `slack-notify` are actions only
+because they exist to run inside a job you already own, next to the checkout or
+the step whose failure you are reporting. If you are adding something new, write
+the composite action first and add the wrapper only if callers want one.
 
 ## Container build and push
 
