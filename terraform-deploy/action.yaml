@@ -103,6 +103,7 @@ runs:
       shell: bash
       run: |
         TENANT_ID=$(az account show --query tenantId -o tsv)
+        echo "Tenant is $TENANT_ID"
         CLIENT_ID=$(az account show --query user.name -o tsv)
         SP_OBJECT_ID=$(az ad sp show --id "$CLIENT_ID" --query id -o tsv)
 
