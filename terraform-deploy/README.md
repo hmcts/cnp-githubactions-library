@@ -2,6 +2,8 @@
 
 A composite GitHub Action that runs Terraform plan and optionally apply for infrastructure changes using Azure service principal authentication.
 
+> **Prefer the OIDC variant for new work.** [`terraform-deploy-openid`](../terraform-deploy-openid/README.md) authenticates with workload identity federation, so there are no long-lived credentials to store or rotate. This action is fully supported, so there is no need to migrate an existing pipeline just for the sake of it.
+
 ## Features
 
 - Full Terraform plan/apply workflow

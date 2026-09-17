@@ -1,4 +1,3 @@
-````markdown
 # Terraform Deploy (OpenID) Workflow
 
 Run Terraform plan and optionally apply for infrastructure changes using Azure OIDC (OpenID Connect) authentication.
@@ -161,6 +160,77 @@ jobs:
       product: my-product
 ```
 
+### With Change Detection
+
+```yaml
+name: Infrastructure
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      has-infra-changes: ${{ steps.filter.outputs.infrastructure }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            infrastructure:
+              - 'infrastructure/**'
+
+  terraform:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has-infra-changes == 'true'
+    uses: hmcts/cnp-githubactions-library/.github/workflows/terraform-deploy-openId.yaml@main
+    with:
+      environment: aat
+      subscription: DCD-CNP-DEV
+      aks-subscription: DCD-CFTAPPS-STG
+      storage-account: nonprod
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      plan-only: ${{ github.event_name == 'pull_request' }}
+      product: my-product
+```
+
+### Using Plan Output in Subsequent Jobs
+
+```yaml
+name: Infrastructure
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  terraform:
+    uses: hmcts/cnp-githubactions-library/.github/workflows/terraform-deploy-openId.yaml@main
+    with:
+      environment: aat
+      subscription: DCD-CNP-DEV
+      aks-subscription: DCD-CFTAPPS-STG
+      storage-account: nonprod
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      product: my-product
+
+  notify:
+    needs: terraform
+    if: needs.terraform.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        run: |
+          echo "Infrastructure changes applied"
+```
+
 ## Comparison with Service Principal Version
 
 | Feature | OpenID (OIDC) | Service Principal |
@@ -203,6 +273,26 @@ The workflow maps environment names to Azure policy-compliant values:
 | `ithc` | `ithc` |
 | `sbox`, `sandbox` | `sandbox` |
 
+## Prerequisites
+
+- Azure service principal with federated credentials configured
+- GitHub Actions OIDC provider configured in Azure AD
+- `.terraform-version` file in the working directory
+- Terraform state storage account configured
+
+## Setting Up OIDC Authentication
+
+1. **Create a service principal** in Azure AD
+
+2. **Add federated credentials** for your GitHub repository:
+   - Issuer: `https://token.actions.githubusercontent.com`
+   - Subject: `repo:your-org/your-repo:ref:refs/heads/main` (adjust as needed)
+   - Audience: `api://AzureADTokenExchange`
+
+3. **Grant permissions** to the service principal for your Azure resources
+
+4. **Store the client ID and subscription ID** as repository variables (`AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`)
+
 ## Notes
 
 - Uses the `terraform-deploy-openid` composite action internally
@@ -210,4 +300,3 @@ The workflow maps environment names to Azure policy-compliant values:
 - PR comments are idempotent (updates existing comment rather than creating duplicates)
 - Plan output is truncated to 60KB if too large
 - The default tenant ID is the HMCTS tenant
-````

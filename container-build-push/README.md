@@ -2,6 +2,8 @@
 
 A composite GitHub Action that provides the core logic for building and pushing container images with multi-platform support. This action can be used directly in workflows or extended with custom logic.
 
+> **Prefer the OIDC variant for new work.** [`container-build-push-openid`](../container-build-push-openid/README.md) takes an Azure client ID and tenant ID and authenticates to ACR itself, so there is no registry password to store or rotate. This action is fully supported and still in use, so there is no need to migrate an existing pipeline just for the sake of it.
+
 ## Features
 
 - Multi-platform build support (linux/amd64, linux/arm64, etc.)

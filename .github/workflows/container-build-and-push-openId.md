@@ -2,7 +2,7 @@
 
 Build and push container images to Azure Container Registry (ACR) using OpenID Connect (OIDC) authentication with support for multi-platform builds.
 
-**Workflow File:** `workflows/container-build-and-push-openId.yaml`
+**Workflow File:** `.github/workflows/container-build-and-push-openId.yaml`
 
 > **💡 Need More Flexibility?** This reusable workflow is great for simple, standardized builds with OIDC authentication. If you need to add custom steps before/after the build or integrate with other actions, consider using the [docker/build-push-action](https://github.com/docker/build-push-action) directly in your workflow.
 
@@ -46,7 +46,7 @@ on:
 
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
+    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-application
       image-tags: |
@@ -92,7 +92,7 @@ jobs:
 ```yaml
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
+    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-app
       registry-name: hmctsprod
@@ -105,7 +105,7 @@ jobs:
 ```yaml
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
+    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-app
       image-tags: |
@@ -123,7 +123,7 @@ jobs:
 ```yaml
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
+    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-app
       dockerfile: ./docker/Dockerfile.prod
@@ -138,7 +138,7 @@ jobs:
 ```yaml
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
+    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-app
       build-args: |
@@ -155,7 +155,7 @@ jobs:
 ```yaml
 jobs:
   build:
-    uses: hmcts/cnp-githubactions-library/workflows/container-build-and-push-openId.yaml@main
+    uses: hmcts/cnp-githubactions-library/.github/workflows/container-build-and-push-openId.yaml@main
     with:
       image-name: my-app
       push: false
