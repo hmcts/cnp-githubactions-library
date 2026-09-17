@@ -1,9 +1,10 @@
-````markdown
 # Terraform Deploy Workflow
 
 Run Terraform plan and optionally apply for infrastructure changes using Azure service principal authentication.
 
 **Workflow File:** `.github/workflows/terraform-deploy.yaml`
+
+> **Prefer the OIDC variant for new work.** [`terraform-deploy-openId.yaml`](./terraform-deploy-openId.md) authenticates with workload identity federation, so there are no long-lived credentials to store or rotate. This workflow is fully supported and still in use, so there is no need to migrate an existing pipeline just for the sake of it.
 
 > **Need More Flexibility?** This reusable workflow is great for simple, standardized deployments. If you need to add custom steps before/after the deployment or integrate with other actions, check out the [composite action](../../terraform-deploy/README.md) which provides the same core logic in a more flexible format.
 
@@ -157,6 +158,46 @@ jobs:
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS_PROD }}
 ```
 
+### With Change Detection
+
+```yaml
+name: Infrastructure
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      has-infra-changes: ${{ steps.filter.outputs.infrastructure }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            infrastructure:
+              - 'infrastructure/**'
+
+  terraform:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has-infra-changes == 'true'
+    uses: hmcts/cnp-githubactions-library/.github/workflows/terraform-deploy.yaml@main
+    with:
+      environment: aat
+      subscription: DCD-CNP-DEV
+      aks-subscription: DCD-CFTAPPS-STG
+      storage-account: nonprod
+      plan-only: ${{ github.event_name == 'pull_request' }}
+      product: my-product
+    secrets:
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+```
+
 ### Using Plan Output in Subsequent Jobs
 
 ```yaml
@@ -219,4 +260,3 @@ The workflow maps environment names to Azure policy-compliant values:
 - Exit code 0 = no changes, 2 = changes detected, 1 = error
 - PR comments are idempotent (updates existing comment rather than creating duplicates)
 - Plan output is truncated to 60KB if too large
-````
