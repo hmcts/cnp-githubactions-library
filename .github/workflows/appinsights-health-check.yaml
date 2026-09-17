@@ -124,7 +124,7 @@ jobs:
       # run_id, and caches are immutable, so without it a re-run could not persist
       # anything it newly found.
       - name: Restore watchdog state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .watchdog-state.json
           key: watchdog-state-${{ steps.scope.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -151,7 +151,7 @@ jobs:
       # re-reports everything it already reported.
       - name: Save watchdog state
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .watchdog-state.json
           key: watchdog-state-${{ steps.scope.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
