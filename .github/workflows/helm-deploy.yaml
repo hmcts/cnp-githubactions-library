@@ -144,9 +144,11 @@ jobs:
             OCI_PASSWORD="${{ secrets.OCI_PASSWORD }}"
           fi
 
-          echo "oci-registry=$OCI_REGISTRY" >> $GITHUB_OUTPUT
-          echo "oci-username=$OCI_USERNAME" >> $GITHUB_OUTPUT
-          echo "oci-password=$OCI_PASSWORD" >> $GITHUB_OUTPUT
+          {
+            echo "oci-registry=$OCI_REGISTRY"
+            echo "oci-username=$OCI_USERNAME"
+            echo "oci-password=$OCI_PASSWORD"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Deploy Helm chart
         id: deploy

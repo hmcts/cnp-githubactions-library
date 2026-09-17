@@ -111,9 +111,11 @@ jobs:
             PASSWORD="${{ secrets.REGISTRY_PASSWORD }}"
           fi
 
-          echo "registry=$REGISTRY" >> $GITHUB_OUTPUT
-          echo "username=$USERNAME" >> $GITHUB_OUTPUT
-          echo "password=$PASSWORD" >> $GITHUB_OUTPUT
+          {
+            echo "registry=$REGISTRY"
+            echo "username=$USERNAME"
+            echo "password=$PASSWORD"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build and push container image
         id: build
