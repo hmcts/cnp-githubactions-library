@@ -32,7 +32,20 @@ The workflow ships no instructions. What a valid fix looks like in your reposito
 
 **A GitHub App** whose id and private key are available as secrets. It needs `actions: read`, `contents: write`, `pull-requests: write` and `issues: write` on the repository. The workflow scopes the generated token down to exactly those four, because the agent runs unattended with that token within reach. `actions: read` is what reads the failed run's logs: a public repository grants that to any authenticated token, a private one does not.
 
-**Bedrock access** via the shared `HMCTSClaudeGitHubActionsRole`, which the default `aws-role` points at. The calling job must grant `id-token: write` or the OIDC exchange fails.
+**Bedrock access** via the shared `HMCTSClaudeGitHubActionsRole`, which the default `aws-role` points at.
+
+**Permissions on the caller.** A called workflow cannot request more than its caller grants, so the caller must grant everything below or the run ends in `startup_failure` before any job starts — which produces no logs and no annotation, so it reads as an empty run rather than an error:
+
+```yaml
+permissions:
+  contents: write      # commit the fix
+  pull-requests: write # read the PR, comment on it
+  issues: write        # the attempt label
+  actions: read        # read the failed run and its logs
+  id-token: write      # Bedrock OIDC
+```
+
+This workflow narrows them back down per job: only the job that runs the agent gets the write scopes, and the eligibility job keeps read plus `issues: write` for the label.
 
 **A CI workflow to watch.** Name its file in `ci-workflow`; the calling workflow triggers on its completion.
 
@@ -49,8 +62,9 @@ on:
     types: [completed]
 
 permissions:
-  contents: read
-  pull-requests: read
+  contents: write
+  pull-requests: write
+  issues: write
   actions: read
   id-token: write
 
