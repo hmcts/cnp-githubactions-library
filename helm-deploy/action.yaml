@@ -74,6 +74,15 @@ inputs:
     required: false
     default: 'CFT'
 
+  recover-stuck-release:
+    description: 'Roll back or uninstall a release left in a pending state by an interrupted deploy, before upgrading. Set to false to fail instead.'
+    required: false
+    default: 'true'
+  recovery-timeout:
+    description: 'Time to wait for the rollback or uninstall performed by recover-stuck-release'
+    required: false
+    default: '4m'
+
 outputs:
   release-revision:
     description: 'Helm release revision number'
@@ -84,6 +93,9 @@ outputs:
   deployment-time:
     description: 'Time taken for the deployment'
     value: ${{ steps.deploy.outputs.deployment-time }}
+  recovery:
+    description: 'What the stuck-release recovery did, if anything: rollback, uninstall, or empty'
+    value: ${{ steps.recovery.outputs.recovery }}
 
 runs:
   using: 'composite'
@@ -104,6 +116,54 @@ runs:
       uses: azure/setup-helm@v5
       with:
         version: 'v4.3.0'
+
+    - name: Recover a stuck release
+      id: recovery
+      # A failure here must not fail the deploy. If recovery could not run, the
+      # upgrade below fails on its own with a clearer error than this step would.
+      continue-on-error: true
+      if: inputs.recover-stuck-release == 'true'
+      shell: bash
+      env:
+        RELEASE_NAME: ${{ inputs.release-name }}
+        NAMESPACE: ${{ inputs.namespace }}
+        RECOVERY_TIMEOUT: ${{ inputs.recovery-timeout }}
+      run: |
+        set -uo pipefail
+
+        STATUS=$(helm status "$RELEASE_NAME" -n "$NAMESPACE" -o json 2>/dev/null \
+          | jq -r '.info.status // empty' || true)
+
+        case "$STATUS" in
+          pending-install|pending-upgrade|pending-rollback)
+            echo "Release $RELEASE_NAME is stuck in $STATUS, most likely from a deploy that was cancelled or timed out."
+            ;;
+          *)
+            echo "Release status: ${STATUS:-not found}. Nothing to recover."
+            exit 0
+            ;;
+        esac
+
+        REVISIONS=$(helm history "$RELEASE_NAME" -n "$NAMESPACE" -o json 2>/dev/null | jq 'length' || echo 0)
+
+        if [ "${REVISIONS:-0}" -gt 1 ]; then
+          echo "Rolling back to the last good revision."
+          if helm rollback "$RELEASE_NAME" -n "$NAMESPACE" \
+               --cleanup-on-fail --wait --timeout "$RECOVERY_TIMEOUT"; then
+            echo "recovery=rollback" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Rollback failed, falling back to uninstall."
+        else
+          echo "Only one revision, so there is no good state to roll back to. Uninstalling."
+        fi
+
+        # --wait is deliberately omitted. Azure Service Operator resources such as
+        # blob services and flexible-server databases sit in Terminating for
+        # minutes, and waiting on them buys nothing: the release secret that
+        # blocks the next upgrade is already gone.
+        helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" --timeout "$RECOVERY_TIMEOUT" || true
+        echo "recovery=uninstall" >> "$GITHUB_OUTPUT"
 
     - name: Login to OCI Registry
       if: inputs.oci-registry != ''

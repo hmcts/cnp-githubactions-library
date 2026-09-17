@@ -88,6 +88,16 @@ on:
         required: false
         type: boolean
         default: true
+      recover-stuck-release:
+        description: 'Roll back or uninstall a release left pending by an interrupted deploy, before upgrading'
+        required: false
+        type: boolean
+        default: true
+      recovery-timeout:
+        description: 'Time to wait for the rollback or uninstall performed by recover-stuck-release'
+        required: false
+        type: string
+        default: '4m'
     secrets:
       AZURE_CREDENTIALS:
         description: 'Azure service principal credentials (JSON format)'
@@ -171,3 +181,5 @@ jobs:
           oci-password: ${{ steps.oci-config.outputs.oci-password }}
           values-template: ${{ inputs.values-template }}
           subchart-paths: ${{ inputs.subchart-paths }}
+          recover-stuck-release: ${{ inputs.recover-stuck-release }}
+          recovery-timeout: ${{ inputs.recovery-timeout }}
