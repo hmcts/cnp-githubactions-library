@@ -119,6 +119,9 @@ runs:
 
     - name: Recover a stuck release
       id: recovery
+      # A failure here must not fail the deploy. If recovery could not run, the
+      # upgrade below fails on its own with a clearer error than this step would.
+      continue-on-error: true
       if: inputs.recover-stuck-release == 'true'
       shell: bash
       env:

@@ -187,6 +187,8 @@ Before upgrading, this action checks for that state and clears it:
 - Otherwise it does nothing.
 
 Set `recover-stuck-release: false` to skip the check and let the deploy fail.
+The step is `continue-on-error`, so a recovery that cannot run does not fail the
+deploy: the upgrade then fails on its own with a clearer error.
 The `recovery` output reports what happened, so a caller can react to a deploy
 that was preceded by an uninstall.
 
@@ -195,6 +197,11 @@ resources such as blob services and flexible-server databases sit in
 `Terminating` for minutes, and waiting on them achieves nothing: the release
 secret that blocks the next upgrade has already gone.
 
+
+The recovery cannot bound itself with `timeout-minutes`, which composite action
+steps do not support. Each Helm call it makes carries `--timeout`
+`recovery-timeout` instead, so the worst case is roughly twice that value: a
+rollback that runs out of time, then the uninstall that follows it.
 ### Give the job enough time
 
 Set the calling job's `timeout-minutes` higher than the `timeout` you pass here
