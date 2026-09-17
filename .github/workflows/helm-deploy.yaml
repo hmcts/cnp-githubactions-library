@@ -98,6 +98,16 @@ on:
         required: false
         type: string
         default: '4m'
+      helm-qps:
+        description: 'Queries per second for Helm''s Kubernetes client (HELM_QPS)'
+        required: false
+        type: string
+        default: '50'
+      helm-burst-limit:
+        description: 'Client-side throttling burst limit for Helm''s Kubernetes client (HELM_BURST_LIMIT)'
+        required: false
+        type: string
+        default: '300'
     secrets:
       AZURE_CREDENTIALS:
         description: 'Azure service principal credentials (JSON format)'
@@ -183,3 +193,5 @@ jobs:
           subchart-paths: ${{ inputs.subchart-paths }}
           recover-stuck-release: ${{ inputs.recover-stuck-release }}
           recovery-timeout: ${{ inputs.recovery-timeout }}
+          helm-qps: ${{ inputs.helm-qps }}
+          helm-burst-limit: ${{ inputs.helm-burst-limit }}

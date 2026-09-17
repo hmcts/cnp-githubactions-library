@@ -83,6 +83,15 @@ inputs:
     required: false
     default: '4m'
 
+  helm-qps:
+    description: 'Queries per second for Helm''s Kubernetes client (HELM_QPS). Helm defaults this to 0, which falls through to client-go''s default of 5, throttling --wait polling on charts with several subcharts or dependent services and causing "client rate limiter Wait returned an error: context deadline exceeded".'
+    required: false
+    default: '50'
+  helm-burst-limit:
+    description: 'Client-side throttling burst limit for Helm''s Kubernetes client (HELM_BURST_LIMIT)'
+    required: false
+    default: '300'
+
 outputs:
   release-revision:
     description: 'Helm release revision number'
@@ -116,6 +125,15 @@ runs:
       uses: azure/setup-helm@v5
       with:
         version: 'v4.3.0'
+
+    # Helm reads HELM_QPS/HELM_BURST_LIMIT from the environment (pkg/cli/environment.go),
+    # so exporting them via GITHUB_ENV here applies to every helm command below,
+    # including the recovery rollback/uninstall --wait calls.
+    - name: Set Helm client rate limits
+      shell: bash
+      run: |
+        echo "HELM_QPS=${{ inputs.helm-qps }}" >> "$GITHUB_ENV"
+        echo "HELM_BURST_LIMIT=${{ inputs.helm-burst-limit }}" >> "$GITHUB_ENV"
 
     - name: Recover a stuck release
       id: recovery

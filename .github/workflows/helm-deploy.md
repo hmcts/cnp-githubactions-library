@@ -113,6 +113,8 @@ jobs:
 | `dry-run` | Simulate deployment | No | `false` |
 | `recover-stuck-release` | Roll back or uninstall a release left in a pending state by an interrupted deploy, before upgrading | No | `true` |
 | `recovery-timeout` | Time to wait for that rollback or uninstall | No | `4m` |
+| `helm-qps` | Queries per second for Helm's Kubernetes client (`HELM_QPS`) | No | `50` |
+| `helm-burst-limit` | Client-side throttling burst limit for Helm's Kubernetes client (`HELM_BURST_LIMIT`) | No | `300` |
 | `oci-registry` | OCI registry URL (overrides secret) | No | - |
 | `oci-username` | OCI username (overrides secret) | No | - |
 | `oci-password` | OCI password (overrides secret) | No | - |

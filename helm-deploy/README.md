@@ -170,6 +170,8 @@ steps:
 | `dry-run` | Simulate deployment without making changes | No | `false` |
 | `recover-stuck-release` | Roll back or uninstall a release left in a pending state by an interrupted deploy, before upgrading | No | `true` |
 | `recovery-timeout` | Time to wait for that rollback or uninstall | No | `4m` |
+| `helm-qps` | Queries per second for Helm's Kubernetes client (`HELM_QPS`) | No | `50` |
+| `helm-burst-limit` | Client-side throttling burst limit for Helm's Kubernetes client (`HELM_BURST_LIMIT`) | No | `300` |
 | `oci-registry` | OCI registry URL for chart dependencies | No | - |
 | `oci-username` | Username for OCI registry authentication | No | - |
 | `oci-password` | Password for OCI registry authentication | No | - |
@@ -346,6 +348,28 @@ Set the calling job's `timeout-minutes` higher than the `timeout` you pass here
 plus the `recovery-timeout`. Otherwise the job can be killed part-way through the
 upgrade, which produces exactly the pending state this recovery exists to clean
 up, on every run.
+
+## Client-side rate limiting on large charts
+
+Helm's Kubernetes client throttles its own requests. `HELM_QPS` defaults to 0,
+which falls through to client-go's own default of 5 requests/sec, and
+`HELM_BURST_LIMIT` defaults to 100. A chart with a parent chart plus several
+subcharts and dependent services (e.g. redis, postgresql) can starve that
+budget while `--wait` polls readiness, and the deploy fails with:
+
+```
+client rate limiter Wait returned an error: context deadline exceeded
+```
+
+even though nothing is unhealthy - the client just ran out of request budget
+while waiting. Because the deploy runs with `--atomic`, this is expensive: Helm
+uninstalls the release rather than leaving it, so the next run reinstalls from
+scratch instead of upgrading.
+
+This action sets `HELM_QPS` and `HELM_BURST_LIMIT` (defaults `50` and `300`)
+before any Helm command runs, raising the budget so `--wait` polling on
+larger charts doesn't get throttled. Override `helm-qps`/`helm-burst-limit` if
+your chart needs a different budget.
 
 ## Notes
 
