@@ -17,7 +17,7 @@ jobs:
       tag:     ${{ steps.drafter.outputs.tag_name }}
     steps:
       - name: Generate GitHub App token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         id: app-token
         with:
           # Global hmcts organization secrets for the Release Drafter GitHub App
@@ -43,7 +43,7 @@ jobs:
       contents: write
     steps:
       - name: Generate GitHub App token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ secrets.RELEASE_DRAFTER_APP_ID }}
