@@ -51,7 +51,7 @@ jobs:
 ```yaml
   changelog:
     needs: draft
-    uses: hmcts/cnp-githubactions-library/workflows/update-changelog.yaml@main
+    uses: hmcts/cnp-githubactions-library/.github/workflows/update-changelog.yaml@main
     with:
       version:      ${{ needs.draft.outputs.version }}
       tag:          ${{ needs.draft.outputs.tag }}
@@ -63,7 +63,7 @@ jobs:
 ```yaml
   changelog:
     needs: draft
-    uses: hmcts/cnp-githubactions-library/workflows/update-changelog.yaml@main
+    uses: hmcts/cnp-githubactions-library/.github/workflows/update-changelog.yaml@main
     with:
       version:        ${{ needs.draft.outputs.version }}
       tag:            ${{ needs.draft.outputs.tag }}

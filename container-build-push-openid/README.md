@@ -33,9 +33,9 @@ jobs:
       image-tags: |
         latest
         ${{ github.sha }}
-      azureContainerRegistryName: myacrname
-      azureClientId: ${{ secrets.AZURE_CLIENT_ID }}
-      azureTenantId: ${{ secrets.AZURE_TENANT_ID }}
+      registry-name: myacrname
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
 ```
 
 ### Direct Composite Action Usage (OIDC handled internally)

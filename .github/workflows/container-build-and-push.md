@@ -1,9 +1,10 @@
-````markdown
 # Container Build and Push Workflow
 
 Build and push container images to a container registry with support for multi-platform builds.
 
 **Workflow File:** `.github/workflows/container-build-and-push.yaml`
+
+> **Prefer the OIDC variant for new work.** [`container-build-and-push-openId.yaml`](./container-build-and-push-openId.md) authenticates to ACR with workload identity federation, so there is no registry password to store or rotate. This workflow is fully supported and still in use, so there is no need to migrate an existing pipeline just for the sake of it.
 
 > **💡 Need More Flexibility?** This reusable workflow is great for simple, standardized builds. If you need to add custom steps before/after the build or integrate with other actions, check out the [composite action](../../container-build-push/README.md) which provides the same core logic in a more flexible format.
 
@@ -196,4 +197,3 @@ platforms: linux/amd64,linux/arm64
 - The workflow automatically generates metadata and labels for the container image
 - Build summaries are added to the GitHub Actions summary page for easy reference
 
-````
