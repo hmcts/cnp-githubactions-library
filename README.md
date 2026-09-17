@@ -478,6 +478,13 @@ When CI fails on a Renovate dependency-update PR, hand the failure to Claude onc
 📖 **[View workflow documentation](.github/workflows/renovate-autofix.md)**
 
 ```yaml
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+  id-token: write
+
 jobs:
   autofix:
     uses: hmcts/cnp-githubactions-library/.github/workflows/renovate-autofix.yaml@main
