@@ -89,7 +89,7 @@ runs:
   using: 'composite'
   steps:
     - name: Azure Login
-      uses: azure/login@v2
+      uses: azure/login@v3
       with:
         creds: ${{ inputs.azure-credentials }}
 
