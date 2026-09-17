@@ -1,0 +1,25 @@
+# CI for this repository, not a reusable workflow. Do not call this from another repo.
+name: actionlint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Deliberately not path-filtered. A skipped run reports no status at all,
+      # which leaves a required check pending forever on unrelated pull requests.
+      - name: Run actionlint
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
