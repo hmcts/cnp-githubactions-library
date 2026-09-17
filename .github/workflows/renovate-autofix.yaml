@@ -151,7 +151,6 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
-      issues: write # claims the attempt label
     outputs:
       eligible: ${{ steps.gate.outputs.eligible }}
       number: ${{ steps.pr.outputs.number }}
@@ -294,16 +293,30 @@ jobs:
           echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
           [ "$eligible" = "true" ] && echo "eligible — handing PR #${{ steps.pr.outputs.number }} to Claude" || true
 
+      - name: Generate GitHub App Token
+        id: app-token
+        if: steps.gate.outputs.eligible == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.CLAUDE_CODE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_CODE_PRIVATE_KEY }}
+          permission-issues: write
+
       - name: Claim the attempt
         # In this job rather than the next, so the gate above and the claim are one
         # serialised region. Claimed before the agent runs, so a crash or a timeout
         # still consumes the attempt instead of looping.
+        #
+        # The App token, not GITHUB_TOKEN: the latter is refused on the labels endpoint
+        # with "Resource not accessible by integration" even when the caller grants
+        # issues: write.
         if: steps.gate.outputs.eligible == 'true'
         uses: actions/github-script@v9
         env:
           PR: ${{ steps.pr.outputs.number }}
           ATTEMPT_LABEL: ${{ inputs.attempt-label }}
         with:
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             await github.rest.issues.addLabels({
               ...context.repo,
