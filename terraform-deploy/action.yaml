@@ -88,7 +88,7 @@ runs:
         echo "product=$PRODUCT" >> "$GITHUB_OUTPUT"
 
     - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
+      uses: hashicorp/setup-terraform@v4
       with:
         terraform_version_file: ${{ inputs.working-directory }}/.terraform-version
         terraform_wrapper: false
