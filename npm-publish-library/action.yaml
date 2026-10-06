@@ -64,7 +64,7 @@ runs:
   using: 'composite'
   steps:
     - id: release
-      uses: googleapis/release-please-action@v4
+      uses: googleapis/release-please-action@v5
       with:
         token: ${{ inputs.release-please-token }}
         config-file: ${{ inputs.release-please-config-file }}
