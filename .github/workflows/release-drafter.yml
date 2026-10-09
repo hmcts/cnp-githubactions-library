@@ -30,7 +30,7 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token }}
 
-      - uses: release-drafter/release-drafter@v6
+      - uses: release-drafter/release-drafter@v7
         id: drafter
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
