@@ -124,7 +124,7 @@ runs:
     - name: Set up Helm
       uses: azure/setup-helm@v5
       with:
-        version: 'v4.3.0'
+        version: 'v4.3.1'
 
     # Helm reads HELM_QPS/HELM_BURST_LIMIT from the environment (pkg/cli/environment.go),
     # so exporting them via GITHUB_ENV here applies to every helm command below,
