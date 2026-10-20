@@ -134,9 +134,11 @@ jobs:
 |---|---|---|
 | `AZURE_CLIENT_ID` | yes | App registration used for OIDC. Needs Monitoring Reader on the resource. |
 | `AZURE_TENANT_ID` | yes | Azure tenant ID. |
-| `AZURE_SUBSCRIPTION_ID` | yes | Subscription containing the resource. |
+| `AZURE_SUBSCRIPTION_ID` | no | Subscription containing the resource. Not needed for the checks themselves. |
 
 `secrets: inherit` is usually enough.
+
+The checks query the telemetry data plane with a bearer token, so they never need a subscription context — the login uses `allow-no-subscriptions`, and a tenant with no subscriptions at all works. `AZURE_SUBSCRIPTION_ID` is still passed through when you have one, so a subscription-scoped step elsewhere in your caller is unaffected. Because the subscription is optional, nothing will tell you that you forgot it; a downstream job that needs ARM has to check for itself.
 
 ## Outputs
 

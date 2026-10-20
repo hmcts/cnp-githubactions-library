@@ -3,6 +3,8 @@
 // so importing it from a test is not possible. Everything here is pure — no fs, no
 // env, no clock — and the caller supplies the current time.
 
+import { normaliseFingerprint } from "./fingerprint.mjs";
+
 const blankRecord = () => ({ lastNotified: null, lastFiring: null, cleanRuns: 0, resolvedAt: null });
 
 const toMs = (iso) => {
@@ -10,25 +12,46 @@ const toMs = (iso) => {
   return Number.isFinite(ms) ? ms : -Infinity;
 };
 
+const later = (a, b) => (toMs(a) >= toMs(b) ? a : b);
+
+// Several raw fingerprints can reduce to one normalised key, so records are merged
+// rather than overwritten: the newest timestamps keep the cooldown and the recovery
+// announcement honest, and the highest cleanRuns keeps recovery from restarting its
+// count.
+const mergeRecords = (a, b) => ({
+  lastNotified: later(a.lastNotified, b.lastNotified),
+  lastFiring: later(a.lastFiring, b.lastFiring),
+  cleanRuns: Math.max(a.cleanRuns, b.cleanRuns),
+  resolvedAt: later(a.resolvedAt, b.resolvedAt)
+});
+
+const put = (problems, fingerprint, record) => {
+  const key = normaliseFingerprint(fingerprint);
+  // hasOwn rather than `in`, so a fingerprint that happens to name an Object.prototype
+  // member is not merged against it.
+  problems[key] = Object.hasOwn(problems, key) ? mergeRecords(problems[key], record) : record;
+};
+
 // Accepts the previous shape, a flat `{ fingerprint: lastNotifiedIso }` map, as well
-// as the current one. Consumers restore this file from an Actions cache, so a shape
-// change that reset the state would re-report every problem being held quiet.
+// as the current one, and re-keys both on the normalised fingerprint. Consumers
+// restore this file from an Actions cache, so a shape or key change that failed to
+// carry the old entries over would re-report every problem being held quiet.
 export const loadState = (raw) => {
   const problems = {};
   if (raw && typeof raw === "object") {
     if (raw.problems && typeof raw.problems === "object") {
       for (const [fingerprint, record] of Object.entries(raw.problems)) {
         if (!record || typeof record !== "object") continue;
-        problems[fingerprint] = {
+        put(problems, fingerprint, {
           lastNotified: record.lastNotified ?? null,
           lastFiring: record.lastFiring ?? null,
           cleanRuns: Number.isInteger(record.cleanRuns) && record.cleanRuns >= 0 ? record.cleanRuns : 0,
           resolvedAt: record.resolvedAt ?? null
-        };
+        });
       }
     } else if (raw.lastNotified && typeof raw.lastNotified === "object") {
       for (const [fingerprint, iso] of Object.entries(raw.lastNotified)) {
-        problems[fingerprint] = { lastNotified: iso, lastFiring: iso, cleanRuns: 0, resolvedAt: null };
+        put(problems, fingerprint, { lastNotified: iso, lastFiring: iso, cleanRuns: 0, resolvedAt: null });
       }
     }
   }
@@ -62,11 +85,13 @@ export const advanceState = ({ state, firingFingerprints, nowIso, resolveAfterCl
   return { state: { problems }, resolved };
 };
 
+// Keyed on the finding's normalised fingerprint, as every record here is: a problem
+// whose throw site moved is the same problem, and must still be inside its cooldown.
 export const splitByFreshness = ({ findings, state, nowMs, renotifyAfterMs }) => {
   const stillQuiet = [];
   const fresh = [];
   for (const finding of findings) {
-    const last = state.problems[finding.fingerprint]?.lastNotified;
+    const last = state.problems[finding.normalisedFingerprint]?.lastNotified;
     if (last && nowMs - toMs(last) < renotifyAfterMs) {
       stillQuiet.push(finding);
     } else {

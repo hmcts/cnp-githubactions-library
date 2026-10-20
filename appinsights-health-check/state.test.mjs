@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
+import { normaliseFingerprint } from "./fingerprint.mjs";
 import { advanceState, loadState, pruneState, recordNotified, splitByFreshness } from "./state.mjs";
 
 const MINUTE = 60_000;
@@ -14,14 +15,20 @@ const iso = (ms) => new Date(ms).toISOString();
 // Drives one scheduled run end to end, in the order run-checks.mjs does it, so the
 // tests exercise the interaction between hysteresis, freshness and notification
 // rather than each function in isolation.
+// `firing` is given as raw fingerprints, and normalised here exactly where
+// run-checks.mjs does it, so the keys the state sees are the ones it would see in a
+// real run. The reported lists stay raw, as the emitted findings do.
 const run = ({ state, firing, nowMs, resolveAfterCleanRuns = RESOLVE_AFTER_CLEAN_RUNS, maxFindings = 3 }) => {
+  const findings = firing.map((fingerprint) => ({
+    fingerprint,
+    normalisedFingerprint: normaliseFingerprint(fingerprint)
+  }));
   const advanced = advanceState({
     state,
-    firingFingerprints: new Set(firing),
+    firingFingerprints: new Set(findings.map((finding) => finding.normalisedFingerprint)),
     nowIso: iso(nowMs),
     resolveAfterCleanRuns
   });
-  const findings = firing.map((fingerprint) => ({ fingerprint }));
   const { stillQuiet, fresh } = splitByFreshness({
     findings,
     state: advanced.state,
@@ -32,7 +39,7 @@ const run = ({ state, firing, nowMs, resolveAfterCleanRuns = RESOLVE_AFTER_CLEAN
   return {
     state: recordNotified({
       state: advanced.state,
-      fingerprints: emitted.map((finding) => finding.fingerprint),
+      fingerprints: emitted.map((finding) => finding.normalisedFingerprint),
       nowIso: iso(nowMs)
     }),
     resolved: advanced.resolved,
@@ -146,6 +153,92 @@ test("the old flat state migrates without re-reporting or resolving anything", (
 
   const nowClean = run({ state, firing: [], nowMs: start });
   assert.deepEqual(nowClean.resolved, []);
+});
+
+// The throw site a real Node problemId carries, and the same problem after a Renovate
+// bump has moved the line it is thrown from.
+const RAW = "exceptions:ContainerAlreadyExists at handleErrorResponse (/opt/app/node_modules/@azure/core-client/dist/commonjs/deserializationPolicy.js:146:19):api";
+const AFTER_BUMP = RAW.replace(":146:19)", ":151:23)");
+const KEY = normaliseFingerprint(RAW);
+
+test("a state file keyed on raw fingerprints re-keys on the normalised form", () => {
+  const start = Date.parse("2026-01-01T00:00:00.000Z");
+  const cached = {
+    problems: {
+      [RAW]: { lastNotified: iso(start - 30 * MINUTE), lastFiring: iso(start - 30 * MINUTE), cleanRuns: 0, resolvedAt: null }
+    }
+  };
+
+  const state = loadState(cached);
+  assert.deepEqual(Object.keys(state.problems), [KEY]);
+
+  // Post-bump, so the raw fingerprint no longer matches the one in the cached file.
+  const outcome = run({ state, firing: [AFTER_BUMP], nowMs: start });
+  assert.deepEqual(outcome.emitted, []);
+  assert.deepEqual(outcome.stillQuiet, [AFTER_BUMP]);
+  assert.deepEqual(outcome.resolved, []);
+});
+
+test("a legacy flat state keyed on raw fingerprints migrates without re-reporting", () => {
+  const start = Date.parse("2026-01-01T00:00:00.000Z");
+  const state = loadState({ lastNotified: { [RAW]: iso(start - HOUR) } });
+
+  assert.deepEqual(state.problems[KEY], {
+    lastNotified: iso(start - HOUR),
+    lastFiring: iso(start - HOUR),
+    cleanRuns: 0,
+    resolvedAt: null
+  });
+
+  const stillFiring = run({ state, firing: [AFTER_BUMP], nowMs: start });
+  assert.deepEqual(stillFiring.emitted, []);
+  assert.deepEqual(stillFiring.resolved, []);
+
+  const nowClean = run({ state, firing: [], nowMs: start });
+  assert.deepEqual(nowClean.resolved, []);
+});
+
+test("two raw keys that collapse to one merge rather than clobber", () => {
+  const start = Date.parse("2026-01-01T00:00:00.000Z");
+  const state = loadState({
+    problems: {
+      [RAW]: {
+        lastNotified: iso(start - 4 * HOUR),
+        lastFiring: iso(start - 3 * HOUR),
+        cleanRuns: 5,
+        resolvedAt: iso(start - 3 * HOUR)
+      },
+      [AFTER_BUMP]: {
+        lastNotified: iso(start - HOUR),
+        lastFiring: iso(start - 2 * HOUR),
+        cleanRuns: 1,
+        resolvedAt: iso(start - 90 * MINUTE)
+      }
+    }
+  });
+
+  assert.deepEqual(Object.keys(state.problems), [KEY]);
+  assert.deepEqual(state.problems[KEY], {
+    lastNotified: iso(start - HOUR),
+    lastFiring: iso(start - 2 * HOUR),
+    cleanRuns: 5,
+    resolvedAt: iso(start - 90 * MINUTE)
+  });
+
+  // The later lastNotified is the one that has to win, or the merged record falls out
+  // of its cooldown four hours early.
+  assert.deepEqual(run({ state, firing: [RAW], nowMs: start }).emitted, []);
+});
+
+test("merging tolerates records with no timestamps at all", () => {
+  const state = loadState({
+    problems: {
+      [RAW]: { lastNotified: null, lastFiring: null, cleanRuns: 0, resolvedAt: null },
+      [AFTER_BUMP]: { lastNotified: null, lastFiring: null, cleanRuns: 2, resolvedAt: null }
+    }
+  });
+
+  assert.deepEqual(state.problems[KEY], { lastNotified: null, lastFiring: null, cleanRuns: 2, resolvedAt: null });
 });
 
 test("an unreadable or absent state file loads as empty", () => {

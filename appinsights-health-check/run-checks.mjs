@@ -7,6 +7,7 @@
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
+import { normaliseFingerprint } from "./fingerprint.mjs";
 import { advanceState, loadState, pruneState, recordNotified, splitByFreshness } from "./state.mjs";
 
 const QUERY_ENDPOINT = "https://api.applicationinsights.io/v1/apps";
@@ -338,7 +339,10 @@ for (const entry of config?.suppressions ?? []) {
     // Required so the list stays auditable — an unexplained entry is an invisible blind spot.
     fatal(`suppression '${entry.fingerprint}' has no 'reason'. Every suppression must say why.`);
   }
-  suppressions.set(entry.fingerprint, entry.reason);
+  // Both sides of the match are normalised, so an entry written against one build's
+  // line numbers still silences the same problem after a dependency bump moves it.
+  // Two entries that reduce to the same key leave the later one's reason in place.
+  suppressions.set(normaliseFingerprint(entry.fingerprint), entry.reason);
 }
 
 const parseDuration = (text, fallbackMs) => {
@@ -505,17 +509,21 @@ for (const check of checks) {
   anyFired = true;
 
   for (const row of rowsThatFired) {
+    // Both are reported: the raw value is what a human copies into a suppression
+    // entry, the normalised one is the identity every decision is made on.
     const fingerprint = fingerprintFor(check, row);
-    firingFingerprints.add(fingerprint);
+    const normalisedFingerprint = normaliseFingerprint(fingerprint);
+    firingFingerprints.add(normalisedFingerprint);
     allFindings.push({
       fingerprint,
+      normalisedFingerprint,
       checkId: check.id,
       severity,
       rule: ruleText,
       row,
       query: kql,
-      suppressed: suppressions.has(fingerprint),
-      suppressionReason: suppressions.get(fingerprint) ?? null
+      suppressed: suppressions.has(normalisedFingerprint),
+      suppressionReason: suppressions.get(normalisedFingerprint) ?? null
     });
   }
 }
@@ -528,14 +536,16 @@ const resolved = advanced.resolved;
 // columns than fingerprint-by names — grouping by outerMessage while fingerprinting on
 // problemId, say — so the same incident arrives as several rows. Left uncollapsed it
 // would be reported repeatedly and would consume several max-findings slots, crowding
-// out unrelated problems. The extra rows are kept so nothing is lost.
+// out unrelated problems. The extra rows are kept so nothing is lost. Collapsing on
+// the normalised form also folds together rows whose only difference is a throw-site
+// line, which the state keys as one problem and so must be reported as one.
 const byFingerprint = new Map();
 for (const finding of allFindings) {
-  const existing = byFingerprint.get(finding.fingerprint);
+  const existing = byFingerprint.get(finding.normalisedFingerprint);
   if (existing) {
     existing.rows.push(finding.row);
   } else {
-    byFingerprint.set(finding.fingerprint, { ...finding, rows: [finding.row] });
+    byFingerprint.set(finding.normalisedFingerprint, { ...finding, rows: [finding.row] });
   }
 }
 const collapsedFindings = [...byFingerprint.values()];
@@ -554,7 +564,7 @@ const deferred = fresh.slice(maxFindings);
 
 // Only what is actually emitted updates the state, so a deferred finding is still
 // fresh on the next run rather than being silently swallowed by the cap.
-state = recordNotified({ state, fingerprints: emitted.map((finding) => finding.fingerprint), nowIso });
+state = recordNotified({ state, fingerprints: emitted.map((finding) => finding.normalisedFingerprint), nowIso });
 state = pruneState(state, nowMs, STATE_TTL_MS);
 writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
 

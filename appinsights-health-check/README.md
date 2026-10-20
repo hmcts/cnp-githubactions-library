@@ -23,7 +23,7 @@ That split is deliberate:
 
 ## Prerequisites
 
-- `azure/login` before this action, with `id-token: write` on the job
+- `azure/login` before this action, with `id-token: write` on the job. The queries go to the telemetry data plane with a bearer token, so no subscription context is needed — if you have no `AZURE_SUBSCRIPTION_ID`, log in with `allow-no-subscriptions: true` and drop `subscription-id`.
 - The principal needs **Monitoring Reader** on the Application Insights resource. Key Vault access policies do not cover the telemetry data plane:
 
 ```hcl
@@ -190,6 +190,22 @@ A query usually groups by more columns than `fingerprint-by` names — grouping 
 
 Choose columns that are stable for the same underlying problem and different for genuinely different problems. `problemId` is good; a timestamp or a count is not.
 
+#### Throw sites and version bumps
+
+A Node `problemId` is the throw site, so the fingerprint carries a file path, line and column:
+
+```
+exceptions:ContainerAlreadyExists at handleErrorResponse (/opt/app/node_modules/@azure/core-client/dist/commonjs/deserializationPolicy.js:146:19):api
+```
+
+A dependency bump moves that line, which would change the identity of an unchanged problem — defeating its suppression and its cooldown in one go. So every comparison is made on a normalised form, with the directory and the `:line:col` dropped:
+
+```
+exceptions:ContainerAlreadyExists at handleErrorResponse (deserializationPolicy.js):api
+```
+
+Each finding reports both. `fingerprint` is the raw value, which is what to copy into a suppression entry; `normalisedFingerprint` is the identity used for suppression matching, the re-notify cooldown and the `resolved` output, and is the stable key to use if you track findings in an issue or a ticket.
+
 ### Recovery and re-notification
 
 An intermittent problem does not fire on every run — a 15-minute window often catches none of it — so recovery is not declared on the first clean run. A fingerprint is reported in `resolved` only after `resolve-after-clean-runs` consecutive runs without it firing (3 by default, so 45 minutes on a 15-minute schedule), and only if it was reported in the first place. It is announced once per recovery, not on every clean run thereafter.
@@ -199,6 +215,8 @@ The state is kept after recovery, so `renotify-after` still applies to a recurre
 ### Suppressions
 
 An entry needs a `fingerprint` and a `reason` — the reason is mandatory, because an unexplained suppression is an invisible blind spot. Suppressed findings still appear in the run summary with their reason, so silencing stays visible.
+
+Both sides of the match are normalised, so paste in the raw `fingerprint` from a finding and it keeps matching after a dependency bump moves the throw site. Two entries that normalise to the same value collapse, and the later one's reason is the one reported.
 
 Review them periodically: an entry that has not fired in 90 days is probably hiding something that no longer happens, or something that changed shape.
 

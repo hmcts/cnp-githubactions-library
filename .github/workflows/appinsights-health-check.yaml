@@ -61,8 +61,12 @@ on:
         description: 'Azure tenant ID.'
         required: true
       AZURE_SUBSCRIPTION_ID:
-        description: 'Subscription containing the Application Insights resource.'
-        required: true
+        description: |
+          Subscription containing the Application Insights resource. Optional: the
+          queries go to the telemetry data plane with a bearer token and need no
+          subscription context. Pass it only if a downstream job in your caller needs
+          one.
+        required: false
     outputs:
       breached:
         description: 'Whether any check produced a fresh finding.'
@@ -92,12 +96,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # allow-no-subscriptions unconditionally, because an absent subscription-id is a
+      # hard error otherwise: azure/login validates the input before it runs anything,
+      # and an unset secret and an empty string are indistinguishable to it. The flag
+      # is orthogonal to subscription-id, not an alternative — the action still runs
+      # `az account set` whenever one is supplied, so a caller that passes it keeps its
+      # subscription context. The trade is that a caller who meant to pass one and did
+      # not is no longer told so here.
       - name: Azure login
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: true
 
       # Dedup state is per-monitor, so the cache key has to identify the monitor and
       # nothing broader. An unscoped fallback would let one monitor restore another's
