@@ -117,6 +117,46 @@ test("firing again after resolution allows a second recovery announcement", () =
   assert.deepEqual(announcements, [[], [], ["exceptions:a"]]);
 });
 
+// A recurrence that is held quiet because recovery has already been announced is
+// reported nowhere at all: it is in neither `findings` nor `resolved`, and a consumer
+// that closes its tracking issue on `resolved` has nothing open to attach it to.
+test("a recurrence after recovery has been announced is reported on the next run", () => {
+  const start = Date.parse("2026-01-01T00:00:00.000Z");
+  let state = loadState(null);
+
+  state = run({ state, firing: ["exceptions:a"], nowMs: start }).state;
+  for (let i = 1; i <= RESOLVE_AFTER_CLEAN_RUNS; i++) {
+    state = run({ state, firing: [], nowMs: start + i * 15 * MINUTE }).state;
+  }
+
+  const emissions = [];
+  for (let i = 4; i <= 24; i++) {
+    const outcome = run({ state, firing: ["exceptions:a"], nowMs: start + i * 15 * MINUTE });
+    state = outcome.state;
+    if (outcome.emitted.length) emissions.push(i * 15);
+  }
+
+  assert.deepEqual(emissions, [60]);
+});
+
+test("a problem firing every fourth run is reported once per recovery announcement", () => {
+  const start = Date.parse("2026-01-01T00:00:00.000Z");
+  let state = loadState(null);
+  const emissions = [];
+  const announcements = [];
+
+  for (let i = 0; i <= 24; i++) {
+    const nowMs = start + i * 15 * MINUTE;
+    const outcome = run({ state, firing: i % 4 === 0 ? ["exceptions:a"] : [], nowMs });
+    state = outcome.state;
+    if (outcome.emitted.length) emissions.push(i * 15);
+    if (outcome.resolved.length) announcements.push(i * 15);
+  }
+
+  assert.deepEqual(emissions, [0, 60, 120, 180, 240, 300, 360]);
+  assert.deepEqual(announcements, [45, 105, 165, 225, 285, 345]);
+});
+
 test("a fingerprint that was never notified is never announced as resolved", () => {
   const start = Date.parse("2026-01-01T00:00:00.000Z");
   // Deferred by the cap, so it fires but is never emitted.

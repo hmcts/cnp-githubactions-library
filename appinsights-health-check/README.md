@@ -210,7 +210,7 @@ Each finding reports both. `fingerprint` is the raw value, which is what to copy
 
 An intermittent problem does not fire on every run — a 15-minute window often catches none of it — so recovery is not declared on the first clean run. A fingerprint is reported in `resolved` only after `resolve-after-clean-runs` consecutive runs without it firing (3 by default, so 45 minutes on a 15-minute schedule), and only if it was reported in the first place. It is announced once per recovery, not on every clean run thereafter.
 
-The state is kept after recovery, so `renotify-after` still applies to a recurrence. A problem that comes back within that window is listed in the run summary rather than reported again; a problem that comes back after it is reported as a new finding. Records are discarded once they have neither fired nor been reported for 30 days.
+`renotify-after` covers a flap, not an announced recovery. A problem that goes quiet for fewer runs than the threshold and comes back is listed in the run summary rather than reported again, because it never stopped being the same ongoing problem. Once recovery has been announced that story is closed, so the next occurrence is reported as a new finding even if it is inside the window — otherwise a live problem would appear in neither `findings` nor `resolved`. The state itself is kept either way, which is what keeps each recovery to one announcement; records are discarded once they have neither fired nor been reported for 30 days.
 
 ### Suppressions
 
@@ -229,7 +229,7 @@ Review them periodically: an entry that has not fired in 90 days is probably hid
 | `window` | no | `15m` | Evaluation window, substituted as `{{window}}`. |
 | `baseline-window` | no | `7d` | Comparison window, substituted as `{{baseline}}`. |
 | `max-findings` | no | `3` | Cap on fresh findings per run. |
-| `renotify-after` | no | `6h` | How long a reported finding stays quiet, including after it has recovered. |
+| `renotify-after` | no | `6h` | How long a reported finding stays quiet, until it recovers or the window elapses. |
 | `resolve-after-clean-runs` | no | `3` | Consecutive non-firing runs required before a finding is announced as resolved. |
 | `state-path` | no | `.watchdog-state.json` | Where dedup state is read and written. |
 | `fail-on-breach` | no | `false` | Fail the step when any check fires. |

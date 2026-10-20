@@ -64,8 +64,8 @@ on:
         description: |
           Subscription containing the Application Insights resource. Optional: the
           queries go to the telemetry data plane with a bearer token and need no
-          subscription context. Pass it only if a downstream job in your caller needs
-          one.
+          subscription context. Pass it if you want the login to set a subscription
+          context for this job; the health check itself does not use one.
         required: false
     outputs:
       breached:
@@ -78,7 +78,10 @@ on:
         description: 'Fresh findings that exceeded max-findings.'
         value: ${{ jobs.check.outputs.deferred-count }}
       resolved:
-        description: 'Fingerprints that were firing and are now clean.'
+        description: |
+          Normalised fingerprints that were reported on an earlier run and have since
+          been clean for resolve-after-clean-runs consecutive runs. Each is listed once
+          per recovery.
         value: ${{ jobs.check.outputs.resolved }}
 
 jobs:
@@ -100,9 +103,10 @@ jobs:
       # hard error otherwise: azure/login validates the input before it runs anything,
       # and an unset secret and an empty string are indistinguishable to it. The flag
       # is orthogonal to subscription-id, not an alternative — the action still runs
-      # `az account set` whenever one is supplied, so a caller that passes it keeps its
-      # subscription context. The trade is that a caller who meant to pass one and did
-      # not is no longer told so here.
+      # `az account set` whenever one is supplied, so a caller that wants a subscription
+      # context for this job still gets one. That profile is this job's only: a caller's
+      # downstream job runs on a fresh runner and logs in for itself. The trade is that
+      # a caller who meant to pass one and did not is no longer told so here.
       - name: Azure login
         uses: azure/login@v3
         with:

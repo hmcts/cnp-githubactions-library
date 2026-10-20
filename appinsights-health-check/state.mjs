@@ -79,7 +79,16 @@ export const advanceState = ({ state, firingFingerprints, nowIso, resolveAfterCl
     // problems someone was actually told about.
     const announce = cleanRuns >= resolveAfterCleanRuns && record.resolvedAt === null && record.lastNotified !== null;
     if (announce) resolved.push(fingerprint);
-    problems[fingerprint] = { ...record, cleanRuns, resolvedAt: announce ? nowIso : record.resolvedAt };
+    problems[fingerprint] = {
+      ...record,
+      cleanRuns,
+      // The cooldown stops one ongoing problem being re-reported, so it covers a flap
+      // but not an announced recovery: that story is closed and the next occurrence is
+      // genuinely new. It also leaves the guard above unable to announce twice without
+      // an intervening report.
+      lastNotified: announce ? null : record.lastNotified,
+      resolvedAt: announce ? nowIso : record.resolvedAt
+    };
   }
 
   return { state: { problems }, resolved };
@@ -109,8 +118,9 @@ export const recordNotified = ({ state, fingerprints, nowIso }) => {
   return { problems };
 };
 
-// Nothing is dropped when a problem recovers, because the cooldown has to outlive
-// recovery, so the state needs a ceiling of its own.
+// Nothing is dropped when a problem recovers — the record is what keeps recovery to
+// one announcement and a flap inside its cooldown — so the state needs a ceiling of
+// its own.
 export const pruneState = (state, nowMs, ttlMs) => {
   const problems = {};
   for (const [fingerprint, record] of Object.entries(state.problems)) {

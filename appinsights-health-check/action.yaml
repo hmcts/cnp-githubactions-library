@@ -63,7 +63,10 @@ outputs:
     description: 'Fresh findings that exceeded max-findings and were not emitted.'
     value: ${{ steps.run.outputs.deferred-count }}
   resolved:
-    description: 'Fingerprints that were firing on a previous run and are now clean, as a JSON array.'
+    description: |
+      Normalised fingerprints that were reported on an earlier run and have since been
+      clean for resolve-after-clean-runs consecutive runs, as a JSON array. Each is
+      listed once per recovery. A fingerprint that was never reported never appears.
     value: ${{ steps.run.outputs.resolved }}
 
 runs:
