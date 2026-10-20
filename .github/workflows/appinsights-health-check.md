@@ -124,7 +124,8 @@ jobs:
 | `window` | no | `15m` | Evaluation window, substituted as `{{window}}`. |
 | `baseline-window` | no | `7d` | Comparison window, substituted as `{{baseline}}`. |
 | `max-findings` | no | `3` | Cap on fresh findings per run. |
-| `renotify-after` | no | `6h` | How long a reported finding stays quiet. |
+| `renotify-after` | no | `6h` | How long a reported finding stays quiet, including after it has recovered. |
+| `resolve-after-clean-runs` | no | `3` | Consecutive non-firing runs before a finding is announced as resolved. |
 | `runner` | no | `ubuntu-latest` | Runner to use. |
 
 ## Secrets

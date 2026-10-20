@@ -33,6 +33,11 @@ on:
         required: false
         type: string
         default: ''
+      resolve-after-clean-runs:
+        description: 'Consecutive non-firing runs before a finding is announced as resolved.'
+        required: false
+        type: number
+        default: 3
       state-key:
         description: |
           Stable identifier for this monitor, used to scope its deduplication state.
@@ -146,6 +151,7 @@ jobs:
           baseline-window: ${{ inputs.baseline-window }}
           max-findings: ${{ inputs.max-findings }}
           renotify-after: ${{ inputs.renotify-after }}
+          resolve-after-clean-runs: ${{ inputs.resolve-after-clean-runs }}
 
       # always(): a failed check run must not lose the state, or the next run
       # re-reports everything it already reported.
