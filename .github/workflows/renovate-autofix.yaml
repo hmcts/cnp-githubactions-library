@@ -8,11 +8,32 @@ on:
         required: true
         type: string
       ci-workflow:
-        description: "Filename of the workflow whose failure is being diagnosed, e.g. workflow.preview.yml. Used to find the latest failed run when dispatched manually."
-        required: true
+        description: "Filename of the workflow whose failure is being diagnosed, e.g. workflow.preview.yml. Used to find the latest failed run when dispatched manually. Required when ci-system is github-actions, and unused in jenkins mode, where there is no workflow to name."
+        required: false
         type: string
+        default: ''
+      ci-system:
+        description: "Which CI reported the failure: 'github-actions', driven by a workflow_run event, or 'jenkins', driven by a status event. Selected explicitly rather than inferred from the event, so a caller that triggers on both cannot switch mode by accident, and so a manual run — which carries no event to infer from — needs no second rule."
+        required: false
+        type: string
+        default: github-actions
+      jenkins-url:
+        description: "Root URL of the Jenkins controller, used in jenkins mode. A build is only fetched when the status event's target_url sits under this, so a commit status written by something else cannot point the credentials at a host of its choosing."
+        required: false
+        type: string
+        default: 'https://build.hmcts.net'
+      jenkins-status-context:
+        description: "Commit status context Jenkins reports the build under. Every other context — SonarCloud, other integrations, another Jenkins job — is ignored."
+        required: false
+        type: string
+        default: 'continuous-integration/jenkins/pr-head'
       pr-number:
         description: "PR to attempt, for manual runs. Leave unset when triggered by workflow_run — the PR is resolved from the event."
+        required: false
+        type: string
+        default: ''
+      jenkins-build-url:
+        description: "Jenkins build to diagnose, for manual runs in jenkins mode. Required there because a manual run carries no status event to take the build from, and reading the commit statuses instead would need a statuses: read scope that existing callers do not grant."
         required: false
         type: string
         default: ''
@@ -27,7 +48,7 @@ on:
         type: string
         default: 'renovate[bot]'
       allowed-bots:
-        description: "Passed to claude-code-action as allowed_bots, which otherwise refuses a non-human triggering actor. Note this is the bot's short name, not the PR author login."
+        description: "Passed to claude-code-action as allowed_bots, which otherwise refuses a non-human triggering actor. Note this is the bot's short name, not the PR author login. In jenkins mode the triggering actor is the Jenkins App that wrote the commit status, not Renovate, so this has to name that instead — 'hmcts-jenkins-d-to-i' for the d_to_i folder."
         required: false
         type: string
         default: renovate
@@ -37,7 +58,7 @@ on:
         type: string
         default: 'claude:autofix-attempted'
       skip-when-all-failures-match:
-        description: "Regex. When every failed job name matches it, the run is skipped. Use for failures no code change can fix — a deploy against an environment that is switched off, say."
+        description: "Regex. When every failed job name matches it, the run is skipped. Use for failures no code change can fix — a deploy against an environment that is switched off, say. In jenkins mode it matches failed pipeline stage names instead, which are the nearest equivalent."
         required: false
         type: string
         default: ''
@@ -123,6 +144,12 @@ on:
       CLAUDE_CODE_PRIVATE_KEY:
         description: "Private key for that App."
         required: true
+      JENKINS_USERNAME:
+        description: "Jenkins user the build and its console log are read as, in jenkins mode. Optional at workflow_call validation time so `secrets: inherit` keeps working on repos that do not use jenkins mode; the eligibility gate declines when the mode is selected without it."
+        required: false
+      JENKINS_API_TOKEN:
+        description: "API token for that user, from its Jenkins user configuration page — not its password. Same optionality as above. It reaches curl through a 0600 config file rather than the command line, and that file is removed before Claude starts."
+        required: false
     outputs:
       pr-number:
         description: "PR that was resolved, whether or not it was attempted."
@@ -144,8 +171,10 @@ jobs:
     concurrency:
       # Serialised with the claim below, so two failures arriving together cannot both
       # read the label as absent and both go on to run the agent. Keyed on the branch
-      # rather than the PR number, which is not known until this job runs.
-      group: renovate-autofix-${{ github.repository }}-${{ github.event.workflow_run.head_branch || inputs.pr-number }}
+      # rather than the PR number, which is not known until this job runs. A status
+      # event names the branch in `branches`, whose first entry is the branch whose
+      # head the status is on.
+      group: renovate-autofix-${{ github.repository }}-${{ github.event.workflow_run.head_branch || github.event.branches[0].name || inputs.pr-number }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -157,6 +186,7 @@ jobs:
       head-ref: ${{ steps.pr.outputs.head-ref }}
       head-sha: ${{ steps.pr.outputs.head-sha }}
       run-id: ${{ steps.pr.outputs.run-id }}
+      build-url: ${{ steps.pr.outputs.build-url }}
       failed-jobs: ${{ steps.pr.outputs.failed-jobs }}
     steps:
       - name: Resolve the pull request
@@ -165,22 +195,94 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           INPUT_PR: ${{ inputs.pr-number }}
+          CI_SYSTEM: ${{ inputs.ci-system }}
           CI_WORKFLOW: ${{ inputs.ci-workflow }}
           SKIP_PATTERN: ${{ inputs.skip-when-all-failures-match }}
           ATTEMPT_LABEL: ${{ inputs.attempt-label }}
+          EXPECTED_AUTHOR: ${{ inputs.renovate-author }}
+          EXPECTED_BASE: ${{ inputs.base-branch }}
           RUN_ID: ${{ github.event.workflow_run.id }}
           RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
           # A JSON array, so it comes through the environment, not interpolation.
           RUN_PRS: ${{ toJson(github.event.workflow_run.pull_requests) }}
+          # The status event, for jenkins mode. Empty on every other trigger.
+          STATUS_STATE: ${{ github.event.state }}
+          STATUS_CONTEXT: ${{ github.event.context }}
+          STATUS_SHA: ${{ github.event.sha }}
+          STATUS_TARGET_URL: ${{ github.event.target_url }}
+          # Also a JSON array, for the same reason as RUN_PRS.
+          STATUS_BRANCHES: ${{ toJson(github.event.branches) }}
+          JENKINS_URL: ${{ inputs.jenkins-url }}
+          JENKINS_CONTEXT: ${{ inputs.jenkins-status-context }}
+          INPUT_BUILD_URL: ${{ inputs.jenkins-build-url }}
+          JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
+          JENKINS_TOKEN: ${{ secrets.JENKINS_API_TOKEN }}
         run: |
           set -euo pipefail
 
-          if [ -n "$INPUT_PR" ]; then
+          case "$CI_SYSTEM" in
+            github-actions | jenkins) ;;
+            # Anything else would quietly take the github-actions path and look for a
+            # workflow run that does not exist.
+            *) echo "::error::ci-system must be 'github-actions' or 'jenkins', not '$CI_SYSTEM'"
+               exit 1 ;;
+          esac
+
+          run_id=""
+          build_url=""
+          build_result=""
+          failed_jobs='[]'
+
+          if [ "$CI_SYSTEM" = "jenkins" ]; then
+            if [ -n "$INPUT_PR" ]; then
+              number="$INPUT_PR"
+              lookup="PR #$INPUT_PR"
+            else
+              number=""
+              lookup="commit ${STATUS_SHA:-none}"
+              # The status event fires for every commit status on every commit in the
+              # repository, so nothing is looked up at all unless this one is the
+              # configured context reporting a failed build. Jenkins maps a FAILURE
+              # result onto the 'error' state and an UNSTABLE one onto 'failure', so
+              # both of those count — verified against build.hmcts.net. The gate below
+              # still decides; this only keeps the lookups off events that can never
+              # be eligible.
+              if { [ "$STATUS_STATE" = "failure" ] || [ "$STATUS_STATE" = "error" ]; } \
+                && [ "$STATUS_CONTEXT" = "$JENKINS_CONTEXT" ]; then
+                # The status payload has no pull_requests array, only the head SHA, so
+                # the PR comes from the commit. A SHA can belong to more than one PR —
+                # only open ones targeting the base branch are considered, and the
+                # newest of those is taken.
+                number=$(gh api "repos/${GH_REPO}/commits/${STATUS_SHA}/pulls" \
+                  | jq -r --arg b "$EXPECTED_BASE" \
+                    'first(.[] | select(.state == "open" and .base.ref == $b) | .number) // empty') \
+                  || number=""
+                # Branch fallback, for the same reason the workflow_run path has one:
+                # that association is indexed and comes back empty often enough to need
+                # a second route. `branches` holds every branch whose head is this
+                # commit, so each is tried until one has an open PR.
+                if [ -z "$number" ]; then
+                  while read -r branch; do
+                    [ -n "$branch" ] || continue
+                    number=$(gh pr list --state open --head "$branch" \
+                      --base "$EXPECTED_BASE" --limit 1 --json number \
+                      --jq 'first(.[].number) // empty')
+                    if [ -n "$number" ]; then break; fi
+                  done <<<"$(jq -r 'if type == "array" then .[].name else empty end' \
+                    <<<"${STATUS_BRANCHES:-null}")"
+                fi
+              else
+                echo "status '$STATUS_CONTEXT' is '$STATUS_STATE', not a $JENKINS_CONTEXT failure"
+              fi
+            fi
+          elif [ -n "$INPUT_PR" ]; then
             number="$INPUT_PR"
+            lookup="branch '${RUN_BRANCH:-}'"
             # No triggering run — the failed one is looked up below, once the branch
             # is known.
             run_id=""
           else
+            lookup="branch '${RUN_BRANCH:-}'"
             # pull_requests is empty often enough that the branch lookup below has to
             # be there as a fallback.
             # Guarded on type: the payload is absent, and toJson renders null, whenever
@@ -195,7 +297,7 @@ jobs:
           fi
 
           if [ -z "$number" ]; then
-            echo "no open PR found for branch '${RUN_BRANCH:-}' — nothing to do"
+            echo "no open PR found for $lookup — nothing to do"
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -212,7 +314,81 @@ jobs:
           author=$(gh api "repos/${GH_REPO}/pulls/${number}" --jq .user.login)
           echo "author: $author"
 
-          if [ -z "$run_id" ]; then
+          if [ "$CI_SYSTEM" = "jenkins" ]; then
+            # The handle on a Jenkins failure is the build URL. The status event carries
+            # it as target_url; a manual run has no event, so the caller passes it.
+            build_url="${STATUS_TARGET_URL:-}"
+            if [ -n "$INPUT_PR" ]; then
+              build_url="$INPUT_BUILD_URL"
+            fi
+
+            # target_url is the build URL with /display/redirect on the end. That is
+            # stripped rather than followed: where the redirect lands depends on which
+            # UI plugins the controller has, and curl's effective URL carries the
+            # credentials, so following it risks putting them in the log.
+            build_url="${build_url%%[?#]*}"
+            build_url="${build_url%/}"
+            build_url="${build_url%/display/redirect}"
+            build_url="${build_url%/}"
+
+            jenkins_root="${JENKINS_URL%/}"
+            case "$build_url" in
+              '') echo "no Jenkins build URL on the event, and jenkins-build-url is unset" ;;
+              "$jenkins_root"/*) ;;
+              *)
+                # Anyone who can write a commit status chooses its target_url, so the
+                # credentials only ever go to the configured controller.
+                echo "build URL '${build_url}' is not under ${jenkins_root} — not fetching it"
+                build_url=''
+                ;;
+            esac
+
+            # Only Renovate's PRs reach the controller. A build this workflow would
+            # decline anyway is not worth a Jenkins call, and a credentials problem
+            # should not turn every human PR's failure red. Missing credentials are
+            # left to the gate as well, so a repository that selects jenkins mode
+            # without them is declined rather than failed. Eligibility is still the
+            # gate's to decide, below.
+            if [ -n "$build_url" ] && [ "$author" = "$EXPECTED_AUTHOR" ] \
+              && [ -n "$JENKINS_USER" ] && [ -n "$JENKINS_TOKEN" ]; then
+              # The token goes in a 0600 config file rather than on the command line,
+              # where it would be visible to anything reading the process list.
+              conf=$(mktemp)
+              chmod 600 "$conf"
+              trap 'rm -f "$conf"' EXIT
+              printf 'user = "%s:%s"\n' "$JENKINS_USER" "$JENKINS_TOKEN" > "$conf"
+
+              # Proving the controller is reachable and the credentials work here, in
+              # the eligibility job, means an unreachable or unauthenticated Jenkins
+              # fails before the attempt is claimed, so it costs nothing and the run
+              # can simply be retried. 000 is curl's code for a connection that never
+              # happened, which is what a runner outside the HMCTS network gets.
+              code=$(curl -sS --config "$conf" -o /tmp/jenkins-build.json \
+                -w '%{http_code}' --max-time 30 --retry 2 \
+                "${build_url}/api/json?tree=result,building") || code='000'
+              if [ "$code" != "200" ]; then
+                echo "::error::could not read ${build_url} from Jenkins (HTTP ${code}) — check JENKINS_USERNAME and JENKINS_API_TOKEN, and that this runner can reach ${jenkins_root}"
+                exit 1
+              fi
+              build_result=$(jq -r '.result // empty' /tmp/jenkins-build.json)
+              echo "Jenkins build result: ${build_result:-none}"
+
+              # Stage names are the Jenkins equivalent of GitHub Actions job names, so
+              # both skip-when-all-failures-match and what Claude is told read from
+              # them. wfapi belongs to the Pipeline: Stage View plugin; a controller or
+              # a job type without it answers 404, which leaves the list empty.
+              if curl -sS --config "$conf" -f -o /tmp/jenkins-stages.json \
+                --max-time 30 "${build_url}/wfapi/describe"; then
+                failed_jobs=$(jq -c \
+                  '[.stages[]? | select(.status == "FAILED" or .status == "UNSTABLE") | .name]' \
+                  /tmp/jenkins-stages.json)
+              elif [ -n "$SKIP_PATTERN" ]; then
+                echo "::warning::no stage list at ${build_url}/wfapi/describe, so skip-when-all-failures-match has nothing to match and the build will be attempted"
+              fi
+
+              rm -f "$conf"
+            fi
+          elif [ -z "$run_id" ] && [ -n "$CI_WORKFLOW" ]; then
             run_id=$(gh run list --workflow "$CI_WORKFLOW" --branch "$head_ref" \
               --status failure --limit 1 --json databaseId \
               --jq 'first(.[].databaseId) // empty')
@@ -220,8 +396,7 @@ jobs:
           fi
 
           # Which jobs failed decides both eligibility below and what Claude is told.
-          failed_jobs='[]'
-          if [ -n "$run_id" ]; then
+          if [ "$CI_SYSTEM" = "github-actions" ] && [ -n "$run_id" ]; then
             failed_jobs=$(gh run view "$run_id" --json jobs \
               --jq '[.jobs[] | select(.conclusion == "failure") | .name]')
           fi
@@ -245,6 +420,8 @@ jobs:
             echo "head-ref=$head_ref"
             echo "head-sha=$(jq -r .headRefOid /tmp/pr.json)"
             echo "run-id=$run_id"
+            echo "build-url=$build_url"
+            echo "build-result=$build_result"
             echo "author=$author"
             echo "state=$(jq -r .state /tmp/pr.json)"
             echo "base=$(jq -r .baseRefName /tmp/pr.json)"
@@ -259,7 +436,19 @@ jobs:
         env:
           FOUND: ${{ steps.pr.outputs.found }}
           MANUAL: ${{ inputs.pr-number }}
+          CI_SYSTEM: ${{ inputs.ci-system }}
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          STATUS_STATE: ${{ github.event.state }}
+          STATUS_CONTEXT: ${{ github.event.context }}
+          STATUS_SHA: ${{ github.event.sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
+          BUILD_URL: ${{ steps.pr.outputs.build-url }}
+          BUILD_RESULT: ${{ steps.pr.outputs.build-result }}
+          JENKINS_URL: ${{ inputs.jenkins-url }}
+          JENKINS_CONTEXT: ${{ inputs.jenkins-status-context }}
+          # The secrets themselves are not needed here, only whether they are set.
+          JENKINS_CREDS_SET: ${{ secrets.JENKINS_USERNAME != '' && secrets.JENKINS_API_TOKEN != '' }}
           AUTHOR: ${{ steps.pr.outputs.author }}
           EXPECTED_AUTHOR: ${{ inputs.renovate-author }}
           STATE: ${{ steps.pr.outputs.state }}
@@ -278,17 +467,50 @@ jobs:
           eligible=true
           note() { eligible=false; echo "$1"; }
 
+          # 'job' in github-actions mode, 'stage' in jenkins mode — the two things
+          # skip-when-all-failures-match is matched against.
+          unit=job
+
           [ "$FOUND" = "true" ] || note "no PR resolved"
-          [ -n "$MANUAL" ] || [ "$CONCLUSION" = "failure" ] \
-            || note "the triggering run concluded '$CONCLUSION' — only failures are attempted"
+          if [ "$CI_SYSTEM" = "jenkins" ]; then
+            unit=stage
+            # Jenkins maps a FAILURE result onto the 'error' state and an UNSTABLE one
+            # onto 'failure', so both of those are a failed build.
+            [ -n "$MANUAL" ] || [ "$STATUS_STATE" = "failure" ] || [ "$STATUS_STATE" = "error" ] \
+              || note "the commit status is '$STATUS_STATE' — only failures are attempted"
+            [ -n "$MANUAL" ] || [ "$STATUS_CONTEXT" = "$JENKINS_CONTEXT" ] \
+              || note "the status context is '$STATUS_CONTEXT', not $JENKINS_CONTEXT"
+            # The checkout, the fix and the lease are all against the PR head, so a
+            # status for an older commit is diagnosing a build of code that is no
+            # longer there.
+            [ -n "$MANUAL" ] || [ "$STATUS_SHA" = "$HEAD_SHA" ] \
+              || note "the status is for commit $STATUS_SHA but the PR head is $HEAD_SHA — the branch has moved on"
+          else
+            [ -n "$CI_WORKFLOW" ] || note "ci-workflow is required when ci-system is github-actions"
+            [ -n "$MANUAL" ] || [ "$CONCLUSION" = "failure" ] \
+              || note "the triggering run concluded '$CONCLUSION' — only failures are attempted"
+          fi
           [ "$AUTHOR" = "$EXPECTED_AUTHOR" ] || note "PR author is '$AUTHOR', not $EXPECTED_AUTHOR"
           [ "$STATE" = "OPEN" ] || note "PR is $STATE"
           [ "$BASE" = "$EXPECTED_BASE" ] || note "PR targets '$BASE', not $EXPECTED_BASE"
           [ "$IS_FORK" != "true" ] || note "PR is from a fork — the app token cannot push to fork heads"
           [ "$LABELLED" != "true" ] || note "already attempted ($ATTEMPT_LABEL present) — not retrying"
-          [ -n "$RUN_ID" ] || note "no failed run found to diagnose"
+          if [ "$CI_SYSTEM" = "jenkins" ]; then
+            [ "$JENKINS_CREDS_SET" = "true" ] \
+              || note "JENKINS_USERNAME and JENKINS_API_TOKEN are not both set — the console log cannot be read"
+            [ -n "$BUILD_URL" ] || note "no Jenkins build under $JENKINS_URL to diagnose"
+            # ABORTED and NOT_BUILT arrive as 'error' too. A build Jenkins superseded or
+            # timed out is not a failure a code change can fix, and attempting it would
+            # spend the one attempt this PR gets.
+            case "$BUILD_RESULT" in
+              FAILURE | UNSTABLE) ;;
+              *) note "the Jenkins build result is '${BUILD_RESULT:-none}' — only FAILURE and UNSTABLE are attempted" ;;
+            esac
+          else
+            [ -n "$RUN_ID" ] || note "no failed run found to diagnose"
+          fi
           [ "$SKIP" != "true" ] \
-            || note "every failed job matches '$SKIP_PATTERN' — no code change can fix this"
+            || note "every failed $unit matches '$SKIP_PATTERN' — no code change can fix this"
 
           echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
           [ "$eligible" = "true" ] && echo "eligible — handing PR #${{ steps.pr.outputs.number }} to Claude" || true
@@ -390,19 +612,61 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
+          CI_SYSTEM: ${{ inputs.ci-system }}
           RUN_ID: ${{ needs.resolve.outputs.run-id }}
+          BUILD_URL: ${{ needs.resolve.outputs.build-url }}
+          FAILED_JOBS: ${{ needs.resolve.outputs.failed-jobs }}
+          JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
+          JENKINS_TOKEN: ${{ secrets.JENKINS_API_TOKEN }}
         run: |
           set -euo pipefail
 
-          # Stop the run rather than degrade: the agent is told to diagnose from this
-          # file, and an unreadable log leaves it guessing. This step runs before the
-          # attempt is claimed, so failing here costs nothing and can be retried.
-          if ! gh run view "$RUN_ID" --log-failed > /tmp/ci-failure.raw; then
-            echo "::error::could not read the logs for run ${RUN_ID} — the App token needs Actions: read"
-            exit 1
+          if [ "$CI_SYSTEM" = "jenkins" ]; then
+            # Same config-file handling as the eligibility job, and removed as soon as
+            # the log is down: the agent runs in this workspace with Read in its tool
+            # list, so the token must not still be on disk when it starts.
+            conf=$(mktemp)
+            chmod 600 "$conf"
+            trap 'rm -f "$conf"' EXIT
+            printf 'user = "%s:%s"\n' "$JENKINS_USER" "$JENKINS_TOKEN" > "$conf"
+
+            # Stop the run rather than degrade, as below. Reachability and the
+            # credentials were already proved in the eligibility job, before the
+            # attempt was claimed, so getting here and failing means the fetch itself
+            # went wrong rather than the configuration being wrong.
+            if ! curl -sS --config "$conf" -f -o /tmp/ci-failure.raw \
+              --max-time 300 --retry 2 "${BUILD_URL}/consoleText"; then
+              echo "::error::could not read the console log at ${BUILD_URL}/consoleText"
+              exit 1
+            fi
+            rm -f "$conf"
+
+            {
+              echo 'failed<<CONTEXT'
+              echo "JENKINS BUILD: ${BUILD_URL}"
+              echo "FAILED STAGES: ${FAILED_JOBS}"
+              echo 'CONTEXT'
+              echo "log-description=the tail of the Jenkins console log"
+            } >> "$GITHUB_OUTPUT"
+          else
+            # Stop the run rather than degrade: the agent is told to diagnose from this
+            # file, and an unreadable log leaves it guessing. This step runs before the
+            # attempt is claimed, so failing here costs nothing and can be retried.
+            if ! gh run view "$RUN_ID" --log-failed > /tmp/ci-failure.raw; then
+              echo "::error::could not read the logs for run ${RUN_ID} — the App token needs Actions: read"
+              exit 1
+            fi
+
+            {
+              echo 'failed<<CONTEXT'
+              echo "FAILED JOBS: ${FAILED_JOBS}"
+              echo 'CONTEXT'
+              echo "log-description=the tail of the failed jobs' logs"
+            } >> "$GITHUB_OUTPUT"
           fi
 
-          # Keep the tail — the assertion or stack trace is at the end of the log.
+          # Keep the tail — the assertion or stack trace is at the end of the log, and
+          # a Jenkins console log of a full pipeline runs to hundreds of kilobytes.
           tail -c 200000 /tmp/ci-failure.raw > /tmp/ci-failure.log
           if [ ! -s /tmp/ci-failure.log ]; then
             echo "::warning::the failed run reported no job logs, so there is nothing to diagnose from"
@@ -455,9 +719,9 @@ jobs:
             PR: ${{ env.PR }}
             BRANCH: ${{ env.HEAD_REF }}
             UPDATE: ${{ steps.failure.outputs.subject }}
-            FAILED JOBS: ${{ needs.resolve.outputs.failed-jobs }}
+            ${{ steps.failure.outputs.failed }}
 
-            Read /tmp/ci-failure.log first — it is the tail of the failed jobs' logs.
+            Read /tmp/ci-failure.log first — it is ${{ steps.failure.outputs.log-description }}.
             Diagnose from it before changing anything.
 
             ${{ inputs.prompt }}
@@ -528,6 +792,7 @@ jobs:
           PUSHED: ${{ steps.push.outputs.pushed }}
           PUSH_OUTCOME: ${{ steps.push.outcome }}
           FAILED_JOBS: ${{ needs.resolve.outputs.failed-jobs }}
+          BUILD_URL: ${{ needs.resolve.outputs.build-url }}
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
           ATTEMPT_LABEL: ${{ inputs.attempt-label }}
         with:
@@ -540,6 +805,9 @@ jobs:
             const state = process.env.STATE;
             const runUrl =
               `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            // Only set in jenkins mode, where the run link above is this workflow and
+            // not the build that failed.
+            const buildUrl = process.env.BUILD_URL;
 
             // Report on the push, not the fix: a lease rejection leaves the branch
             // exactly as it was and must not read as success.
@@ -587,7 +855,7 @@ jobs:
               MARKER,
               heading,
               '',
-              `The pipeline failed${process.env.FAILED_JOBS ? ` in **${process.env.FAILED_JOBS}**` : ''}. [View the run](${runUrl}).`,
+              `The pipeline failed${process.env.FAILED_JOBS ? ` in **${process.env.FAILED_JOBS}**` : ''}. [View the run](${runUrl}).${buildUrl ? ` [View the Jenkins build](${buildUrl}).` : ''}`,
               why,
               '',
               '---',
