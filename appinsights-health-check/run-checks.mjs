@@ -7,8 +7,14 @@
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
+import { normaliseFingerprint } from "./fingerprint.mjs";
+import { advanceState, loadState, pruneState, recordNotified, splitByFreshness } from "./state.mjs";
+
 const QUERY_ENDPOINT = "https://api.applicationinsights.io/v1/apps";
 const SUMMARY_LIMIT = 40;
+// Long enough that a problem recurring on any plausible cycle still meets its own
+// history rather than arriving as something new.
+const STATE_TTL_MS = 30 * 86_400_000;
 
 const env = (name, fallback = "") => process.env[name] ?? fallback;
 
@@ -333,7 +339,10 @@ for (const entry of config?.suppressions ?? []) {
     // Required so the list stays auditable — an unexplained entry is an invisible blind spot.
     fatal(`suppression '${entry.fingerprint}' has no 'reason'. Every suppression must say why.`);
   }
-  suppressions.set(entry.fingerprint, entry.reason);
+  // Both sides of the match are normalised, so an entry written against one build's
+  // line numbers still silences the same problem after a dependency bump moves it.
+  // Two entries that reduce to the same key leave the later one's reason in place.
+  suppressions.set(normaliseFingerprint(entry.fingerprint), entry.reason);
 }
 
 const parseDuration = (text, fallbackMs) => {
@@ -351,12 +360,16 @@ const renotifyAfterMs = parseDuration(
 const maxFindings = Number.parseInt(env("MAX_FINDINGS", "3"), 10);
 if (!Number.isFinite(maxFindings) || maxFindings < 1) fatal("max-findings must be a positive integer.");
 
+const resolveAfterCleanRuns = Number.parseInt(env("RESOLVE_AFTER_CLEAN_RUNS", "3"), 10);
+if (!Number.isFinite(resolveAfterCleanRuns) || resolveAfterCleanRuns < 1) {
+  fatal("resolve-after-clean-runs must be a positive integer.");
+}
+
 const statePath = env("STATE_PATH", ".watchdog-state.json");
-let state = { lastNotified: {} };
+let state = loadState(null);
 if (existsSync(statePath)) {
   try {
-    const parsed = JSON.parse(readFileSync(statePath, "utf8"));
-    if (parsed && typeof parsed === "object") state = { lastNotified: parsed.lastNotified ?? {} };
+    state = loadState(JSON.parse(readFileSync(statePath, "utf8")));
   } catch {
     // A corrupt state file must not stop detection; it degrades to re-reporting.
     console.log(`::warning::appinsights-health-check: could not read state at '${statePath}' — treating all findings as fresh.`);
@@ -433,6 +446,7 @@ const fingerprintFor = (check, row) => {
 const window = env("WINDOW", "15m");
 const baseline = env("BASELINE_WINDOW", "7d");
 const nowMs = Date.now();
+const nowIso = new Date(nowMs).toISOString();
 
 const verdicts = [];
 const allFindings = [];
@@ -495,36 +509,43 @@ for (const check of checks) {
   anyFired = true;
 
   for (const row of rowsThatFired) {
+    // Both are reported: the raw value is what a human copies into a suppression
+    // entry, the normalised one is the identity every decision is made on.
     const fingerprint = fingerprintFor(check, row);
-    firingFingerprints.add(fingerprint);
+    const normalisedFingerprint = normaliseFingerprint(fingerprint);
+    firingFingerprints.add(normalisedFingerprint);
     allFindings.push({
       fingerprint,
+      normalisedFingerprint,
       checkId: check.id,
       severity,
       rule: ruleText,
       row,
       query: kql,
-      suppressed: suppressions.has(fingerprint),
-      suppressionReason: suppressions.get(fingerprint) ?? null
+      suppressed: suppressions.has(normalisedFingerprint),
+      suppressionReason: suppressions.get(normalisedFingerprint) ?? null
     });
   }
 }
 
-// Resolution: anything previously reported that is no longer firing.
-const resolved = Object.keys(state.lastNotified).filter((fp) => !firingFingerprints.has(fp));
+const advanced = advanceState({ state, firingFingerprints, nowIso, resolveAfterCleanRuns });
+state = advanced.state;
+const resolved = advanced.resolved;
 
 // Collapse to one finding per fingerprint. A query almost always groups by more
 // columns than fingerprint-by names — grouping by outerMessage while fingerprinting on
 // problemId, say — so the same incident arrives as several rows. Left uncollapsed it
 // would be reported repeatedly and would consume several max-findings slots, crowding
-// out unrelated problems. The extra rows are kept so nothing is lost.
+// out unrelated problems. The extra rows are kept so nothing is lost. Collapsing on
+// the normalised form also folds together rows whose only difference is a throw-site
+// line, which the state keys as one problem and so must be reported as one.
 const byFingerprint = new Map();
 for (const finding of allFindings) {
-  const existing = byFingerprint.get(finding.fingerprint);
+  const existing = byFingerprint.get(finding.normalisedFingerprint);
   if (existing) {
     existing.rows.push(finding.row);
   } else {
-    byFingerprint.set(finding.fingerprint, { ...finding, rows: [finding.row] });
+    byFingerprint.set(finding.normalisedFingerprint, { ...finding, rows: [finding.row] });
   }
 }
 const collapsedFindings = [...byFingerprint.values()];
@@ -533,16 +554,7 @@ const duplicateRowCount = allFindings.length - collapsedFindings.length;
 const suppressed = collapsedFindings.filter((f) => f.suppressed);
 const notSuppressed = collapsedFindings.filter((f) => !f.suppressed);
 
-const stillQuiet = [];
-const fresh = [];
-for (const finding of notSuppressed) {
-  const last = state.lastNotified[finding.fingerprint];
-  if (last && nowMs - new Date(last).getTime() < renotifyAfterMs) {
-    stillQuiet.push(finding);
-  } else {
-    fresh.push(finding);
-  }
-}
+const { stillQuiet, fresh } = splitByFreshness({ findings: notSuppressed, state, nowMs, renotifyAfterMs });
 
 const severityRank = { critical: 0, high: 1, medium: 2, low: 3 };
 fresh.sort((a, b) => (severityRank[a.severity] ?? 9) - (severityRank[b.severity] ?? 9));
@@ -552,8 +564,8 @@ const deferred = fresh.slice(maxFindings);
 
 // Only what is actually emitted updates the state, so a deferred finding is still
 // fresh on the next run rather than being silently swallowed by the cap.
-for (const finding of emitted) state.lastNotified[finding.fingerprint] = new Date(nowMs).toISOString();
-for (const fingerprint of resolved) delete state.lastNotified[fingerprint];
+state = recordNotified({ state, fingerprints: emitted.map((finding) => finding.normalisedFingerprint), nowIso });
+state = pruneState(state, nowMs, STATE_TTL_MS);
 writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
 
 const findingsPath = "appinsights-health-check-findings.json";
@@ -600,7 +612,7 @@ if (deferred.length) {
   summary("");
 }
 if (stillQuiet.length) {
-  summary(`### ${stillQuiet.length} ongoing finding(s) within the re-notify window`);
+  summary(`### ${stillQuiet.length} finding(s) within the re-notify window`);
   summary("");
   for (const finding of stillQuiet.slice(0, SUMMARY_LIMIT)) summary(`- \`${finding.fingerprint}\``);
   summary("");
@@ -614,7 +626,7 @@ if (suppressed.length) {
   summary("");
 }
 if (resolved.length) {
-  summary(`### ${resolved.length} resolved`);
+  summary(`### ${resolved.length} resolved after ${resolveAfterCleanRuns} clean run(s)`);
   summary("");
   for (const fingerprint of resolved.slice(0, SUMMARY_LIMIT)) summary(`- \`${fingerprint}\``);
   summary("");

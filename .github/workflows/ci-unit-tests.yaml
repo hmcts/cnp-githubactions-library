@@ -1,0 +1,31 @@
+# CI for this repository, not a reusable workflow. Do not call this from another repo.
+name: unit tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Run unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Deliberately not path-filtered. A skipped run reports no status at all,
+      # which leaves a required check pending forever on unrelated pull requests.
+      #
+      # The runner's own node, and the built-in test runner: these actions ship
+      # without dependencies, and an install step in CI would invite one.
+      # The glob is expanded by the shell rather than by node, because node's own
+      # positional handling of directories and patterns has moved between releases.
+      - name: Run the appinsights-health-check tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test appinsights-health-check/*.test.mjs

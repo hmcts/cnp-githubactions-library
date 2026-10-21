@@ -30,8 +30,15 @@ inputs:
     description: 'How long a finding stays suppressed after being reported, as a duration like 6h or 30m. Overrides the config default.'
     required: false
     default: ''
+  resolve-after-clean-runs:
+    description: |
+      How many consecutive runs a problem must not fire in before it is announced as
+      resolved. On a 15-minute schedule, 3 is 45 minutes. A problem absent from a
+      single run is usually still there — the window just caught none of it.
+    required: false
+    default: '3'
   state-path:
-    description: 'File the run state (last-notified timestamps per fingerprint) is read from and written to. Restore and save it around this action to make deduplication work across runs.'
+    description: 'File the run state (per-fingerprint notification, firing and recovery history) is read from and written to. Restore and save it around this action to make deduplication work across runs.'
     required: false
     default: '.watchdog-state.json'
   fail-on-breach:
@@ -56,7 +63,10 @@ outputs:
     description: 'Fresh findings that exceeded max-findings and were not emitted.'
     value: ${{ steps.run.outputs.deferred-count }}
   resolved:
-    description: 'Fingerprints that were firing on a previous run and are now clean, as a JSON array.'
+    description: |
+      Normalised fingerprints that were reported on an earlier run and have since been
+      clean for resolve-after-clean-runs consecutive runs, as a JSON array. Each is
+      listed once per recovery. A fingerprint that was never reported never appears.
     value: ${{ steps.run.outputs.resolved }}
 
 runs:
@@ -96,6 +106,7 @@ runs:
         BASELINE_WINDOW: ${{ inputs.baseline-window }}
         MAX_FINDINGS: ${{ inputs.max-findings }}
         RENOTIFY_AFTER: ${{ inputs.renotify-after }}
+        RESOLVE_AFTER_CLEAN_RUNS: ${{ inputs.resolve-after-clean-runs }}
         STATE_PATH: ${{ inputs.state-path }}
         FAIL_ON_BREACH: ${{ inputs.fail-on-breach }}
         AI_TOKEN: ${{ steps.token.outputs.token }}

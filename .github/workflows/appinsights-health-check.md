@@ -124,7 +124,8 @@ jobs:
 | `window` | no | `15m` | Evaluation window, substituted as `{{window}}`. |
 | `baseline-window` | no | `7d` | Comparison window, substituted as `{{baseline}}`. |
 | `max-findings` | no | `3` | Cap on fresh findings per run. |
-| `renotify-after` | no | `6h` | How long a reported finding stays quiet. |
+| `renotify-after` | no | `6h` | How long a reported finding stays quiet, until it recovers or the window elapses. |
+| `resolve-after-clean-runs` | no | `3` | Consecutive non-firing runs before a finding is announced as resolved. |
 | `runner` | no | `ubuntu-latest` | Runner to use. |
 
 ## Secrets
@@ -133,9 +134,11 @@ jobs:
 |---|---|---|
 | `AZURE_CLIENT_ID` | yes | App registration used for OIDC. Needs Monitoring Reader on the resource. |
 | `AZURE_TENANT_ID` | yes | Azure tenant ID. |
-| `AZURE_SUBSCRIPTION_ID` | yes | Subscription containing the resource. |
+| `AZURE_SUBSCRIPTION_ID` | no | Subscription containing the resource. Not needed for the checks themselves. |
 
 `secrets: inherit` is usually enough.
+
+The checks query the telemetry data plane with a bearer token, so they never need a subscription context — the login uses `allow-no-subscriptions`, and a tenant with no subscriptions at all works. `AZURE_SUBSCRIPTION_ID` is still passed through when you have one, so the login sets a subscription context for this job if you want it. That context is this job's alone — a downstream job in your caller runs on a fresh runner and logs in for itself. Because the subscription is optional, nothing will tell you that you forgot it; a downstream job that needs ARM has to check for itself.
 
 ## Outputs
 
@@ -144,7 +147,7 @@ jobs:
 | `breached` | `true` when there is at least one fresh finding. Gate downstream jobs on this. |
 | `findings` | Fresh findings as a JSON array. |
 | `deferred-count` | Fresh findings that exceeded `max-findings`. |
-| `resolved` | Fingerprints that were firing and are now clean. |
+| `resolved` | Normalised fingerprints that were reported and have since been clean for `resolve-after-clean-runs` runs. Each is listed once per recovery. |
 
 The full verdict artefact — every check with its query, row count, rule and outcome — is uploaded as `appinsights-health-check-findings-<run_id>-<run_attempt>`, retained 14 days.
 

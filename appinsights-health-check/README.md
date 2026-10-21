@@ -17,13 +17,13 @@ That split is deliberate:
 - Per-finding fingerprinting, so an ongoing incident is reported once rather than every run
 - A suppression list in your config, requiring a stated reason for every entry
 - A cap on findings per run, with the remainder counted rather than silently dropped
-- Reports resolution when a previously-firing finding goes clean
+- Reports resolution once a previously-reported finding has been clean for several consecutive runs
 - Queries the REST API with a token from your `azure/login` session, so no `az` extension install on every run
 - **A query that errors, 403s or times out fails the run.** It is never reported as healthy — that confusion is the main failure mode this action exists to avoid
 
 ## Prerequisites
 
-- `azure/login` before this action, with `id-token: write` on the job
+- `azure/login` before this action, with `id-token: write` on the job. The queries go to the telemetry data plane with a bearer token, so no subscription context is needed — if you have no `AZURE_SUBSCRIPTION_ID`, log in with `allow-no-subscriptions: true` and drop `subscription-id`.
 - The principal needs **Monitoring Reader** on the Application Insights resource. Key Vault access policies do not cover the telemetry data plane:
 
 ```hcl
@@ -190,9 +190,33 @@ A query usually groups by more columns than `fingerprint-by` names — grouping 
 
 Choose columns that are stable for the same underlying problem and different for genuinely different problems. `problemId` is good; a timestamp or a count is not.
 
+#### Throw sites and version bumps
+
+A Node `problemId` is the throw site, so the fingerprint carries a file path, line and column:
+
+```
+exceptions:ContainerAlreadyExists at handleErrorResponse (/opt/app/node_modules/@azure/core-client/dist/commonjs/deserializationPolicy.js:146:19):api
+```
+
+A dependency bump moves that line, which would change the identity of an unchanged problem — defeating its suppression and its cooldown in one go. So every comparison is made on a normalised form, with the directory and the `:line:col` dropped:
+
+```
+exceptions:ContainerAlreadyExists at handleErrorResponse (deserializationPolicy.js):api
+```
+
+Each finding reports both. `fingerprint` is the raw value, which is what to copy into a suppression entry; `normalisedFingerprint` is the identity used for suppression matching, the re-notify cooldown and the `resolved` output, and is the stable key to use if you track findings in an issue or a ticket.
+
+### Recovery and re-notification
+
+An intermittent problem does not fire on every run — a 15-minute window often catches none of it — so recovery is not declared on the first clean run. A fingerprint is reported in `resolved` only after `resolve-after-clean-runs` consecutive runs without it firing (3 by default, so 45 minutes on a 15-minute schedule), and only if it was reported in the first place. It is announced once per recovery, not on every clean run thereafter.
+
+`renotify-after` covers a flap, not an announced recovery. A problem that goes quiet for fewer runs than the threshold and comes back is listed in the run summary rather than reported again, because it never stopped being the same ongoing problem. Once recovery has been announced that story is closed, so the next occurrence is reported as a new finding even if it is inside the window — otherwise a live problem would appear in neither `findings` nor `resolved`. The state itself is kept either way, which is what keeps each recovery to one announcement; records are discarded once they have neither fired nor been reported for 30 days.
+
 ### Suppressions
 
 An entry needs a `fingerprint` and a `reason` — the reason is mandatory, because an unexplained suppression is an invisible blind spot. Suppressed findings still appear in the run summary with their reason, so silencing stays visible.
+
+Both sides of the match are normalised, so paste in the raw `fingerprint` from a finding and it keeps matching after a dependency bump moves the throw site. Two entries that normalise to the same value collapse, and the later one's reason is the one reported.
 
 Review them periodically: an entry that has not fired in 90 days is probably hiding something that no longer happens, or something that changed shape.
 
@@ -205,7 +229,8 @@ Review them periodically: an entry that has not fired in 90 days is probably hid
 | `window` | no | `15m` | Evaluation window, substituted as `{{window}}`. |
 | `baseline-window` | no | `7d` | Comparison window, substituted as `{{baseline}}`. |
 | `max-findings` | no | `3` | Cap on fresh findings per run. |
-| `renotify-after` | no | `6h` | How long a reported finding stays quiet. |
+| `renotify-after` | no | `6h` | How long a reported finding stays quiet, until it recovers or the window elapses. |
+| `resolve-after-clean-runs` | no | `3` | Consecutive non-firing runs required before a finding is announced as resolved. |
 | `state-path` | no | `.watchdog-state.json` | Where dedup state is read and written. |
 | `fail-on-breach` | no | `false` | Fail the step when any check fires. |
 
@@ -217,12 +242,12 @@ Review them periodically: an entry that has not fired in 90 days is probably hid
 | `findings` | Fresh findings as a JSON array. |
 | `findings-path` | Full verdict artefact: every check, query, row count, rule and outcome. |
 | `deferred-count` | Fresh findings that exceeded `max-findings`. |
-| `resolved` | Fingerprints that were firing and are now clean. |
+| `resolved` | Fingerprints that were reported and have since been clean for `resolve-after-clean-runs` runs. Each is listed once. |
 
 ## Notes
 
 - **State must persist between runs**, or every run re-reports everything. Cache it, as in the example, or commit it to a branch.
-- **Scope that state to one monitor.** If two monitors in a repository can restore each other's state, the damage is not just noise: every fingerprint in the borrowed state that this monitor is not currently seeing is reported as `resolved`, and any that overlap are suppressed as already-notified. Include the app ID or an explicit key in the cache key, and do not add an unscoped `restore-keys` fallback. The reusable workflow does this for you via its `state-key` input.
+- **Scope that state to one monitor.** If two monitors in a repository can restore each other's state, the damage is not just noise: every fingerprint in the borrowed state that this monitor is not currently seeing is reported as `resolved` once it has been clean for long enough, and any that overlap are suppressed as already-notified. Include the app ID or an explicit key in the cache key, and do not add an unscoped `restore-keys` fallback. The reusable workflow does this for you via its `state-key` input.
 - **Scheduled workflows only run the default branch's copy** of the workflow file, and GitHub drops `schedule` triggers under load. Consider a check that alerts when the watchdog itself has not run recently.
 - **Watch query cost.** A `join` over a 7-day baseline every 15 minutes adds up. The summary reports each query's execution time.
 - **Validate queries in the portal first**, and record the observed baseline alongside the threshold. A badly-scoped query either cries wolf or hides a real incident, and the action cannot tell which.
