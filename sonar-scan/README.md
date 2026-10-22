@@ -31,12 +31,13 @@ only works properly from a full-history checkout.
 - Defaults to SonarQube Cloud, with `sonar-host-url` for the self-hosted HMCTS server
 - Warns when the checkout is shallow, which otherwise degrades blame, new-code
   detection and pull-request decoration without failing anything
-- Optionally creates the Sonar project over the API, idempotently, for a repo whose
-  project does not exist yet
+- Optionally creates the Sonar project over the API, idempotently — an existing
+  project, a lookup the token may not browse, and two runs racing to create the same
+  project all end green
 - Writes a run summary naming the scanner, host, project and gate decision, with a
   dashboard link, so a red run can be diagnosed from the Actions tab
-- Says so plainly when the scanner produced no report rather than reporting a
-  success it cannot substantiate
+- Never reports a gate it did not see: with no scanner report the summary says the
+  gate was never evaluated rather than reading a zero exit status as a pass
 
 ## Usage
 
@@ -139,14 +140,40 @@ coverage, which the quality gate may well pass.
 
 ### Creating the project first
 
-For a repo whose Sonar project does not exist yet. The key, name and organization
-are read from `sonar-project.properties` unless you pass them as inputs.
+For a repo whose Sonar project does not exist yet. Inputs win; anything left empty
+falls back to `sonar-project.properties` if there is one. The organization is
+required on SonarQube Cloud and ignored on SonarQube Server.
 
 ```yaml
       - uses: hmcts/cnp-githubactions-library/sonar-scan@main
         with:
           sonar-token: ${{ secrets.SONAR_TOKEN }}
           create-project: ${{ github.ref == 'refs/heads/master' }}
+```
+
+A private repository should say so, or the project is created public and its source
+becomes world-readable on Sonar:
+
+```yaml
+      - uses: hmcts/cnp-githubactions-library/sonar-scan@main
+        with:
+          sonar-token: ${{ secrets.SONAR_TOKEN }}
+          create-project: true
+          visibility: private
+```
+
+A Gradle repo on the self-hosted server needs no properties file at all, since
+Gradle keeps its analysis properties in `build.gradle`:
+
+```yaml
+      - uses: hmcts/cnp-githubactions-library/sonar-scan@main
+        with:
+          sonar-token: ${{ secrets.SONAR_TOKEN }}
+          scanner: gradle
+          sonar-host-url: https://sonar.reform.hmcts.net/
+          create-project: true
+          project-key: uk.gov.hmcts.reform:my-api
+          project-name: 'Reform :: my-api'
 ```
 
 ### Reading the dashboard URL
@@ -175,10 +202,11 @@ are read from `sonar-project.properties` unless you pass them as inputs.
 | `gradle-task` | no | `sonar` | Gradle task to run. |
 | `maven-goals` | no | `sonar:sonar` | Maven goals to run. |
 | `create-project` | no | `false` | Create the project over the API if it does not exist. Must be `true` or `false`. |
-| `properties-file` | no | `sonar-project.properties` | Where `create-project` reads the key, name and organization from. Relative to `working-directory`. |
-| `project-key` | no | `''` | Overrides `sonar.projectKey` from `properties-file`. |
-| `project-name` | no | `''` | Overrides `sonar.projectName` from `properties-file`. |
-| `organization` | no | `''` | Overrides `sonar.organization` from `properties-file`. SonarQube Cloud only. |
+| `properties-file` | no | `sonar-project.properties` | Where `create-project` falls back to for the key, name and organization. Relative to `working-directory`. Not needed if the inputs below cover what is required. |
+| `project-key` | no | `''` | Takes precedence over `sonar.projectKey` in `properties-file`. Required by `create-project`. |
+| `project-name` | no | `''` | Takes precedence over `sonar.projectName` in `properties-file`. Required by `create-project`. |
+| `organization` | no | `''` | Takes precedence over `sonar.organization` in `properties-file`. Required by `create-project` on SonarQube Cloud only; SonarQube Server has no organizations. |
+| `visibility` | no | `public` | Visibility of a project created by `create-project`: `public` or `private`. |
 
 ## Outputs
 
@@ -269,11 +297,27 @@ decide; that is the whole point of having the input.
 Creating a project is a separate permission from Execute Analysis, which is all a
 scan needs. A token that scans happily will fail project creation with `Insufficient
 privileges`; the action reports the HTTP code, the response body and that hint.
-Created projects are made public, matching the HMCTS SonarQube Cloud organisation.
-The action also tries to set the project's main branch to the repository's default
-branch, because a project created over the API otherwise takes the server's default
-name and analyses of your default branch get filed as a side branch; that call is
-best effort and only warns if it fails.
+
+Existence is probed with `api/components/show`, which needs only Browse on the
+project. The more obvious `api/projects/search` needs Administer System on SonarQube
+Server, so a token holding Execute Analysis and Provision Projects is refused by it —
+which would turn every build after the first into a failure. If even the Browse
+lookup is refused, the action warns that it cannot tell, attempts the create anyway,
+and treats an `already exists` response as success. The same handling covers two
+concurrent runs on one push, or two matrix legs, both deciding to create: whoever
+loses the race still ends green, because the project exists either way.
+
+`visibility` defaults to `public`, which matches the HMCTS SonarQube Cloud
+organisation. On a **private** repository that default would publish your source,
+issues and measures to anyone who can reach the Sonar host, so the action emits a
+warning naming that consequence when it is about to do it — set `visibility: private`
+instead. It only applies to projects this action creates; an existing project's
+visibility is never changed.
+
+The action also tries to set a newly created project's main branch to the
+repository's default branch, because a project created over the API otherwise takes
+the server's default name and analyses of your default branch get filed as a side
+branch; that call is best effort and only warns if it fails.
 
 Gate `create-project` on the default branch, as in the example above. Running it on
 every pull request is wasted API calls against a project that will already exist.
@@ -325,5 +369,12 @@ misleading result rather than failing. Set `scanner` to match the build.
 The summary step looks for the scanner's receipt in `.scannerwork/`, `build/sonar/`
 and `target/sonar/`. If there is none, the summary says so and the step emits a
 warning rather than claiming a clean scan — the usual causes are a Gradle or Maven
-task that resolved to a no-op, or a scanner that never started. Treat it as a scan
-that did not happen.
+task that resolved to a no-op (up to date, skipped, or disabled with
+`sonar.skip=true`), or a scanner that never started. Treat it as a scan that did not
+happen.
+
+The quality gate row reads **Never evaluated** in that case, even though the scan
+step exited zero. The gate verdict is otherwise inferred from the scan step's exit
+status, and a task that never contacted the server exits zero without a verdict to
+report; printing "Passed" there would be precisely the false assurance this action
+is meant to remove.

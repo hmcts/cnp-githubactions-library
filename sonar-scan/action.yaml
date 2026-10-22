@@ -81,9 +81,20 @@ inputs:
     required: false
     default: ''
   organization:
-    description: 'SonarQube Cloud organization the created project belongs to. Falls back to sonar.organization in properties-file. Not used by self-hosted SonarQube Server.'
+    description: |
+      SonarQube Cloud organization the created project belongs to. Falls back to
+      sonar.organization in properties-file. Required only when the host is SonarQube
+      Cloud; SonarQube Server has no such concept.
     required: false
     default: ''
+  visibility:
+    description: |
+      Visibility of a project created by create-project: 'public' or 'private'.
+      Defaults to public, which is the HMCTS norm on SonarQube Cloud — but a public
+      Sonar project exposes the source and issues of a private repository to anyone,
+      so set it to private if the repository is not public.
+    required: false
+    default: 'public'
 
 outputs:
   dashboard-url:
@@ -101,6 +112,7 @@ runs:
         QUALITY_GATE: ${{ inputs.quality-gate }}
         QUALITY_GATE_TIMEOUT: ${{ inputs.quality-gate-timeout }}
         CREATE_PROJECT: ${{ inputs.create-project }}
+        VISIBILITY: ${{ inputs.visibility }}
         WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
@@ -135,6 +147,16 @@ runs:
 
         require_boolean quality-gate "$QUALITY_GATE"
         require_boolean create-project "$CREATE_PROJECT"
+
+        # Checked even when create-project is false: a typo here would otherwise lie
+        # dormant until the day someone turns project creation on.
+        case "$VISIBILITY" in
+          public|private) ;;
+          *)
+            echo "::error::sonar-scan: visibility must be 'public' or 'private', got '$VISIBILITY'."
+            exit 1
+            ;;
+        esac
 
         if [ "$QUALITY_GATE" = "true" ] && ! printf '%s' "$QUALITY_GATE_TIMEOUT" | grep -qE '^[0-9]+$'; then
           echo "::error::sonar-scan: quality-gate-timeout must be a whole number of seconds, got '$QUALITY_GATE_TIMEOUT'."
@@ -172,7 +194,9 @@ runs:
         PROJECT_KEY: ${{ inputs.project-key }}
         PROJECT_NAME: ${{ inputs.project-name }}
         ORGANIZATION: ${{ inputs.organization }}
+        VISIBILITY: ${{ inputs.visibility }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        REPO_PRIVATE: ${{ github.event.repository.private }}
       run: |
         set -euo pipefail
 
@@ -205,22 +229,39 @@ runs:
         name="$(trim "$PROJECT_NAME")"
         org="$(trim "$ORGANIZATION")"
 
-        if [ -z "$key" ] || [ -z "$name" ] || [ -z "$org" ]; then
-          if [ ! -f "$PROPERTIES_FILE" ]; then
-            echo "::error::sonar-scan: create-project needs the project key, name and organization. Pass them as inputs, or add '$PROPERTIES_FILE' to the repository."
-            exit 1
-          fi
+        # An organization is a SonarQube Cloud concept. A self-hosted SonarQube Server
+        # has none, so demanding one there would block a perfectly complete set of
+        # inputs — and the create call treats it as optional anyway.
+        host_lower="$(printf '%s' "${SONAR_HOST_URL%/}" | tr '[:upper:]' '[:lower:]')"
+        case "$host_lower" in
+          *sonarcloud.io*|*sonarqube.us*) org_required=true ;;
+          *) org_required=false ;;
+        esac
+
+        # Only ever a fallback, and only for values still empty — inputs win, and the
+        # file being absent is not itself a problem if the inputs were complete.
+        if [ -f "$PROPERTIES_FILE" ]; then
           [ -n "$key" ] || key="$(trim "$(read_property sonar.projectKey "$PROPERTIES_FILE")")"
           [ -n "$name" ] || name="$(trim "$(read_property sonar.projectName "$PROPERTIES_FILE")")"
           [ -n "$org" ] || org="$(trim "$(read_property sonar.organization "$PROPERTIES_FILE")")"
         fi
 
-        if [ -z "$key" ]; then
-          echo "::error::sonar-scan: no project key. Set the project-key input or sonar.projectKey in '$PROPERTIES_FILE'."
-          exit 1
+        missing=()
+        [ -n "$key" ] || missing+=("project-key (or sonar.projectKey)")
+        [ -n "$name" ] || missing+=("project-name (or sonar.projectName)")
+        if [ "$org_required" = "true" ] && [ -z "$org" ]; then
+          missing+=("organization (or sonar.organization), which SonarQube Cloud requires")
         fi
-        if [ -z "$name" ]; then
-          echo "::error::sonar-scan: no project name. Set the project-name input or sonar.projectName in '$PROPERTIES_FILE'."
+
+        if [ ${#missing[@]} -gt 0 ]; then
+          unresolved="$(printf '%s; ' "${missing[@]}")"
+          unresolved="${unresolved%; }"
+          if [ -f "$PROPERTIES_FILE" ]; then
+            source_note="Neither the inputs nor '$PROPERTIES_FILE' set them."
+          else
+            source_note="The inputs do not set them, and '$PROPERTIES_FILE' does not exist to fall back to."
+          fi
+          echo "::error::sonar-scan: create-project is missing: ${unresolved}. ${source_note}"
           exit 1
         fi
 
@@ -232,34 +273,42 @@ runs:
 
         echo "Looking for project '$key' on ${SONAR_HOST_URL%/}"
 
-        search="$(curl -sS -G \
+        # api/components/show needs only Browse on the project. api/projects/search,
+        # the obvious choice, needs Administer System on SonarQube Server, so an
+        # Execute-Analysis plus Provision-Projects token is refused by it — and a repo
+        # that sets create-project on its default branch would then fail every build
+        # once the project existed.
+        lookup="$(curl -sS -G \
           -w '\n%{http_code}' \
           -H "Authorization: Bearer ${SONAR_TOKEN}" \
-          "${org_args[@]+"${org_args[@]}"}" \
-          --data-urlencode "projects=${key}" \
-          "${api}/projects/search")"
-        search_code="$(printf '%s' "$search" | tail -n 1)"
-        search_body="$(printf '%s' "$search" | sed '$d')"
+          --data-urlencode "component=${key}" \
+          "${api}/components/show")"
+        lookup_code="$(printf '%s' "$lookup" | tail -n 1)"
+        lookup_body="$(printf '%s' "$lookup" | sed '$d')"
 
-        case "$search_code" in
+        case "$lookup_code" in
           200)
-            if printf '%s' "$search_body" \
-                 | jq -e --arg key "$key" 'any(.components[]?; .key == $key)' >/dev/null 2>&1; then
-              echo "Project '$key' already exists, nothing to create."
-              exit 0
-            fi
+            echo "Project '$key' already exists, nothing to create."
+            exit 0
+            ;;
+          404)
+            echo "Project '$key' does not exist yet."
             ;;
           401|403)
-            echo "::error::sonar-scan: the Sonar API rejected the token when looking up project '$key' (HTTP $search_code). Note the SONAR_TOKEN may not have permission to create projects: that is a separate permission from Execute Analysis. ${search_body}"
-            exit 1
+            # Not fatal: a refusal here says nothing about whether the project exists,
+            # and the create call below settles it either way.
+            echo "::warning::sonar-scan: could not tell whether project '$key' exists — the Sonar API refused the lookup (HTTP $lookup_code), which usually means the token has no Browse permission on it. Attempting to create it instead; an 'already exists' reply will be taken as success."
             ;;
           *)
-            echo "::error::sonar-scan: could not look up project '$key' (HTTP $search_code). ${search_body}"
-            exit 1
+            echo "::warning::sonar-scan: could not look up project '$key' (HTTP $lookup_code), so whether it exists is unknown. Attempting to create it instead. ${lookup_body}"
             ;;
         esac
 
-        echo "Project '$key' not found, creating it."
+        if [ "$VISIBILITY" = "public" ] && [ "$REPO_PRIVATE" = "true" ]; then
+          echo "::warning::sonar-scan: about to create '$key' as a *public* Sonar project while this repository is private, so its source, issues and measures would be readable by anyone on ${SONAR_HOST_URL%/}. Set 'visibility: private' if that is not intended."
+        fi
+
+        echo "Creating project '$key' (visibility: ${VISIBILITY})."
 
         create="$(curl -sS -X POST \
           -w '\n%{http_code}' \
@@ -267,12 +316,19 @@ runs:
           "${org_args[@]+"${org_args[@]}"}" \
           --data-urlencode "project=${key}" \
           --data-urlencode "name=${name}" \
-          --data-urlencode "visibility=public" \
+          --data-urlencode "visibility=${VISIBILITY}" \
           "${api}/projects/create")"
         create_code="$(printf '%s' "$create" | tail -n 1)"
         create_body="$(printf '%s' "$create" | sed '$d')"
 
         if [ "$create_code" != "200" ]; then
+          # Two jobs on the same push, or two matrix legs, can both miss the lookup and
+          # both POST. The loser gets a 400 naming the key. The project exists, which is
+          # all this step was for, so that is a success and not a red build.
+          if printf '%s' "$create_body" | grep -qi "already exists"; then
+            echo "Project '$key' already exists, nothing to create."
+            exit 0
+          fi
           echo "::error::sonar-scan: could not create project '$key' (HTTP $create_code). ${create_body}"
           if printf '%s' "$create_body" | grep -q "Insufficient privileges"; then
             echo "::error::sonar-scan: the SONAR_TOKEN may not have permission to create projects, which is a separate permission from Execute Analysis. Either grant it, or create '$key' once by hand in the Sonar UI and drop create-project."
@@ -451,14 +507,20 @@ runs:
 
         echo "dashboard-url=${dashboard_url}" >> "$GITHUB_OUTPUT"
 
-        if [ "$QUALITY_GATE" = "true" ]; then
+        if [ "$QUALITY_GATE" != "true" ]; then
+          gate="Not checked (\`quality-gate: false\`)"
+        elif [ -z "$report" ]; then
+          # A green exit status is not evidence of a gate decision. A Gradle 'sonar' task
+          # that is up-to-date, skipped, or disabled with sonar.skip=true exits 0 without
+          # contacting the server, and reporting that as "Passed" is the exact
+          # misreporting this action exists to prevent.
+          gate="Never evaluated — no scanner report was produced"
+        else
           case "$outcome" in
             success) gate="Passed" ;;
             failure) gate="Not passed, or the scan failed before reaching the gate" ;;
             *) gate="Not reached — the scan did not run" ;;
           esac
-        else
-          gate="Not checked (\`quality-gate: false\`)"
         fi
 
         {
@@ -486,8 +548,8 @@ runs:
           if [ "$outcome" = "skipped" ]; then
             echo "The scan did not run, so nothing was analysed. An earlier step in this action failed — check its annotation." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "No \`report-task.txt\` was written to \`.scannerwork/\`, \`build/sonar/\` or \`target/sonar/\`, so **nothing can be confirmed as analysed** and no dashboard link is available. Usually this means the scanner never started, or the Gradle or Maven task resolved to a no-op." >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::sonar-scan: the scanner produced no report-task.txt, so this run cannot be confirmed to have analysed anything."
+            echo "No \`report-task.txt\` was written to \`.scannerwork/\`, \`build/sonar/\` or \`target/sonar/\`, so **nothing can be confirmed as analysed**, the quality gate was never evaluated, and no dashboard link is available. Usually this means the scanner never started, or the Gradle or Maven task resolved to a no-op — up to date, skipped, or disabled with \`sonar.skip=true\`. The step passing is not evidence to the contrary." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::sonar-scan: the scanner produced no report-task.txt, so this run cannot be confirmed to have analysed anything and the quality gate was never evaluated."
           fi
         fi
 
