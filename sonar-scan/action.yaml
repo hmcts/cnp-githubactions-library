@@ -1,0 +1,499 @@
+name: 'Sonar code quality scan'
+description: 'Run a SonarQube Cloud or SonarQube Server analysis and block on the quality gate, for repos that build on GitHub Actions rather than Jenkins'
+author: 'HMCTS'
+
+inputs:
+  sonar-token:
+    description: |
+      Sonar analysis token. GitHub does not expose the secrets context to composite
+      actions, so it has to arrive as an explicit input, e.g. ${{ secrets.SONAR_TOKEN }}.
+    required: true
+  scanner:
+    description: |
+      Which scanner to run: 'cli' for the standalone SonarScanner CLI, 'gradle' for the
+      org.sonarqube Gradle plugin, or 'maven' for sonar-maven-plugin. The CLI scanner is
+      explicitly not supported for Gradle or Maven projects — it cannot see the compiled
+      classes or the build's own analysis properties — so this must match the build.
+    required: false
+    default: 'cli'
+  sonar-host-url:
+    description: |
+      Sonar server to analyse against. Defaults to SonarQube Cloud. Set it to
+      https://sonar.reform.hmcts.net/ for the self-hosted HMCTS server.
+    required: false
+    default: 'https://sonarcloud.io'
+  working-directory:
+    description: 'Directory the scan runs from, and the project base directory for the CLI scanner.'
+    required: false
+    default: '.'
+  quality-gate:
+    description: |
+      Wait for the quality gate and fail the step when it does not pass, which is what
+      waitForQualityGate() does on Jenkins — but without that plugin's server-side
+      webhook. Implemented with the scanner-native sonar.qualitygate.wait property, so
+      it is one step and behaves the same for all three scanner modes. Must be
+      'true' or 'false'.
+    required: false
+    default: 'true'
+  quality-gate-timeout:
+    description: |
+      How long to wait for the quality gate, in seconds. 1800 matches the 30-minute
+      timeout the Jenkins pipeline wraps waitForQualityGate() in.
+    required: false
+    default: '1800'
+  args:
+    description: |
+      Extra analysis properties, one -Dkey=value per line. Passed to whichever scanner
+      runs. Keep each line a single plain -Dkey=value token: the CLI scan action rejects
+      shell metacharacters here.
+    required: false
+    default: ''
+  gradle-task:
+    description: |
+      Gradle task to run. Use 'sonarqube' if the build wires coverage onto the deprecated
+      task name instead of onto 'sonar'.
+    required: false
+    default: 'sonar'
+  maven-goals:
+    description: 'Maven goals to run.'
+    required: false
+    default: 'sonar:sonar'
+  create-project:
+    description: |
+      Create the Sonar project over the API before scanning, if it does not already
+      exist. Needs a token permitted to create projects, which is more than a scan
+      needs. Must be 'true' or 'false'.
+    required: false
+    default: 'false'
+  properties-file:
+    description: |
+      Properties file the project key, name and organization are read from when
+      create-project is set and they were not passed as inputs. Relative to
+      working-directory.
+    required: false
+    default: 'sonar-project.properties'
+  project-key:
+    description: 'Project key to create. Falls back to sonar.projectKey in properties-file.'
+    required: false
+    default: ''
+  project-name:
+    description: 'Display name for a created project. Falls back to sonar.projectName in properties-file.'
+    required: false
+    default: ''
+  organization:
+    description: 'SonarQube Cloud organization the created project belongs to. Falls back to sonar.organization in properties-file. Not used by self-hosted SonarQube Server.'
+    required: false
+    default: ''
+
+outputs:
+  dashboard-url:
+    description: 'URL of the analysed project on the Sonar server, read from the scanner report. Empty when the scanner produced no report.'
+    value: ${{ steps.summary.outputs.dashboard-url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        SONAR_TOKEN: ${{ inputs.sonar-token }}
+        SCANNER: ${{ inputs.scanner }}
+        QUALITY_GATE: ${{ inputs.quality-gate }}
+        QUALITY_GATE_TIMEOUT: ${{ inputs.quality-gate-timeout }}
+        CREATE_PROJECT: ${{ inputs.create-project }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+
+        # Every boolean here is compared against the exact string 'true' further down,
+        # so 'True' or 'yes' would read as a deliberate opt-out and quietly skip the
+        # thing it was meant to switch on. Reject anything ambiguous instead.
+        require_boolean() {
+          case "$2" in
+            true|false) ;;
+            *)
+              echo "::error::sonar-scan: $1 must be 'true' or 'false', got '$2'. Anything else is rejected rather than treated as false, so a typo cannot silently turn this off."
+              exit 1
+              ;;
+          esac
+        }
+
+        if [ -z "$SONAR_TOKEN" ]; then
+          echo "::error::sonar-scan: sonar-token is empty. On a pull request from a fork GitHub withholds secrets, so guard this step with 'if: github.event.pull_request.head.repo.fork == false'."
+          exit 1
+        fi
+
+        echo "::add-mask::$SONAR_TOKEN"
+
+        case "$SCANNER" in
+          cli|gradle|maven) ;;
+          *)
+            echo "::error::sonar-scan: scanner must be one of cli, gradle or maven, got '$SCANNER'."
+            exit 1
+            ;;
+        esac
+
+        require_boolean quality-gate "$QUALITY_GATE"
+        require_boolean create-project "$CREATE_PROJECT"
+
+        if [ "$QUALITY_GATE" = "true" ] && ! printf '%s' "$QUALITY_GATE_TIMEOUT" | grep -qE '^[0-9]+$'; then
+          echo "::error::sonar-scan: quality-gate-timeout must be a whole number of seconds, got '$QUALITY_GATE_TIMEOUT'."
+          exit 1
+        fi
+
+        if [ ! -d "$WORKING_DIRECTORY" ]; then
+          echo "::error::sonar-scan: working-directory '$WORKING_DIRECTORY' does not exist."
+          exit 1
+        fi
+
+    - name: Check the checkout depth
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+
+        if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+          echo "::warning::sonar-scan: '$PWD' is not a git checkout, so Sonar cannot attribute issues or detect new code. Run actions/checkout before this action."
+          exit 0
+        fi
+
+        if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+          echo "::warning::sonar-scan: the checkout is shallow. Sonar needs the full history to blame issues and to work out what is new code, and to detect pull-request context reliably. Set 'fetch-depth: 0' on actions/checkout."
+        fi
+
+    - name: Create the Sonar project
+      if: inputs.create-project == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SONAR_TOKEN: ${{ inputs.sonar-token }}
+        SONAR_HOST_URL: ${{ inputs.sonar-host-url }}
+        PROPERTIES_FILE: ${{ inputs.properties-file }}
+        PROJECT_KEY: ${{ inputs.project-key }}
+        PROJECT_NAME: ${{ inputs.project-name }}
+        ORGANIZATION: ${{ inputs.organization }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        set -euo pipefail
+
+        trim() {
+          printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+        }
+
+        # Matches the key exactly rather than as a regex, so sonar.host.url and the
+        # sonar.issue.ignore.* family cannot be mistaken for the key being asked for,
+        # and keeps everything after the first '=' so values containing spaces, colons
+        # or further '=' signs survive intact.
+        read_property() {
+          awk -v want="$1" '
+            {
+              line = $0
+              sub(/^[ \t]+/, "", line)
+              if (line ~ /^[#!]/) next
+              eq = index(line, "=")
+              if (eq == 0) next
+              k = substr(line, 1, eq - 1)
+              v = substr(line, eq + 1)
+              gsub(/^[ \t]+|[ \t]+$/, "", k)
+              gsub(/^[ \t]+|[ \t]+$/, "", v)
+              if (k == want && v != "") { print v; exit }
+            }
+          ' "$2"
+        }
+
+        key="$(trim "$PROJECT_KEY")"
+        name="$(trim "$PROJECT_NAME")"
+        org="$(trim "$ORGANIZATION")"
+
+        if [ -z "$key" ] || [ -z "$name" ] || [ -z "$org" ]; then
+          if [ ! -f "$PROPERTIES_FILE" ]; then
+            echo "::error::sonar-scan: create-project needs the project key, name and organization. Pass them as inputs, or add '$PROPERTIES_FILE' to the repository."
+            exit 1
+          fi
+          [ -n "$key" ] || key="$(trim "$(read_property sonar.projectKey "$PROPERTIES_FILE")")"
+          [ -n "$name" ] || name="$(trim "$(read_property sonar.projectName "$PROPERTIES_FILE")")"
+          [ -n "$org" ] || org="$(trim "$(read_property sonar.organization "$PROPERTIES_FILE")")"
+        fi
+
+        if [ -z "$key" ]; then
+          echo "::error::sonar-scan: no project key. Set the project-key input or sonar.projectKey in '$PROPERTIES_FILE'."
+          exit 1
+        fi
+        if [ -z "$name" ]; then
+          echo "::error::sonar-scan: no project name. Set the project-name input or sonar.projectName in '$PROPERTIES_FILE'."
+          exit 1
+        fi
+
+        api="${SONAR_HOST_URL%/}/api"
+        org_args=()
+        if [ -n "$org" ]; then
+          org_args=(--data-urlencode "organization=${org}")
+        fi
+
+        echo "Looking for project '$key' on ${SONAR_HOST_URL%/}"
+
+        search="$(curl -sS -G \
+          -w '\n%{http_code}' \
+          -H "Authorization: Bearer ${SONAR_TOKEN}" \
+          "${org_args[@]+"${org_args[@]}"}" \
+          --data-urlencode "projects=${key}" \
+          "${api}/projects/search")"
+        search_code="$(printf '%s' "$search" | tail -n 1)"
+        search_body="$(printf '%s' "$search" | sed '$d')"
+
+        case "$search_code" in
+          200)
+            if printf '%s' "$search_body" \
+                 | jq -e --arg key "$key" 'any(.components[]?; .key == $key)' >/dev/null 2>&1; then
+              echo "Project '$key' already exists, nothing to create."
+              exit 0
+            fi
+            ;;
+          401|403)
+            echo "::error::sonar-scan: the Sonar API rejected the token when looking up project '$key' (HTTP $search_code). Note the SONAR_TOKEN may not have permission to create projects: that is a separate permission from Execute Analysis. ${search_body}"
+            exit 1
+            ;;
+          *)
+            echo "::error::sonar-scan: could not look up project '$key' (HTTP $search_code). ${search_body}"
+            exit 1
+            ;;
+        esac
+
+        echo "Project '$key' not found, creating it."
+
+        create="$(curl -sS -X POST \
+          -w '\n%{http_code}' \
+          -H "Authorization: Bearer ${SONAR_TOKEN}" \
+          "${org_args[@]+"${org_args[@]}"}" \
+          --data-urlencode "project=${key}" \
+          --data-urlencode "name=${name}" \
+          --data-urlencode "visibility=public" \
+          "${api}/projects/create")"
+        create_code="$(printf '%s' "$create" | tail -n 1)"
+        create_body="$(printf '%s' "$create" | sed '$d')"
+
+        if [ "$create_code" != "200" ]; then
+          echo "::error::sonar-scan: could not create project '$key' (HTTP $create_code). ${create_body}"
+          if printf '%s' "$create_body" | grep -q "Insufficient privileges"; then
+            echo "::error::sonar-scan: the SONAR_TOKEN may not have permission to create projects, which is a separate permission from Execute Analysis. Either grant it, or create '$key' once by hand in the Sonar UI and drop create-project."
+          fi
+          exit 1
+        fi
+
+        echo "Created project '$key'."
+
+        # A project created over the API gets the server's default main branch name, not
+        # the repository's. If they disagree, analyses of the default branch are filed as
+        # a side branch and the main-branch quality gate never moves. Best effort: the
+        # endpoint is not available on every edition or plan.
+        if [ -n "$DEFAULT_BRANCH" ]; then
+          if curl -sS -f -X POST \
+               -H "Authorization: Bearer ${SONAR_TOKEN}" \
+               --data-urlencode "project=${key}" \
+               --data-urlencode "name=${DEFAULT_BRANCH}" \
+               "${api}/project_branches/rename" >/dev/null 2>&1; then
+            echo "Main branch set to '${DEFAULT_BRANCH}'."
+          else
+            echo "::warning::sonar-scan: could not rename the main branch of '$key' to '${DEFAULT_BRANCH}'. Check it in the Sonar UI — if it does not match the repository's default branch, analyses of that branch will be treated as a side branch."
+          fi
+        fi
+
+    - name: Assemble the analysis properties
+      id: properties
+      shell: bash
+      env:
+        QUALITY_GATE: ${{ inputs.quality-gate }}
+        QUALITY_GATE_TIMEOUT: ${{ inputs.quality-gate-timeout }}
+        EXTRA_ARGS: ${{ inputs.args }}
+        ARGS_FILE: ${{ runner.temp }}/sonar-scan-args
+      run: |
+        set -euo pipefail
+
+        : > "$ARGS_FILE"
+
+        # No HMCTS repository sets this today, so a repo moving off Jenkins loses the
+        # blocking gate unless the action supplies it.
+        if [ "$QUALITY_GATE" = "true" ]; then
+          printf '%s\n' "-Dsonar.qualitygate.wait=true" >> "$ARGS_FILE"
+          printf '%s\n' "-Dsonar.qualitygate.timeout=${QUALITY_GATE_TIMEOUT}" >> "$ARGS_FILE"
+        fi
+
+        while IFS= read -r line; do
+          trimmed="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [ -n "$trimmed" ]; then
+            printf '%s\n' "$trimmed" >> "$ARGS_FILE"
+          fi
+        done <<< "$EXTRA_ARGS"
+
+        echo "Analysis properties:"
+        sed -e 's/^/  /' "$ARGS_FILE"
+
+        {
+          echo "args<<SONAR_SCAN_ARGS_EOF"
+          cat "$ARGS_FILE"
+          echo "SONAR_SCAN_ARGS_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Run the SonarScanner CLI
+      id: cli-scan
+      if: inputs.scanner == 'cli'
+      uses: SonarSource/sonarqube-scan-action@v8.3.0
+      with:
+        projectBaseDir: ${{ inputs.working-directory }}
+        args: ${{ steps.properties.outputs.args }}
+      env:
+        SONAR_TOKEN: ${{ inputs.sonar-token }}
+        SONAR_HOST_URL: ${{ inputs.sonar-host-url }}
+
+    - name: Run the Gradle Sonar plugin
+      id: gradle-scan
+      if: inputs.scanner == 'gradle'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SONAR_TOKEN: ${{ inputs.sonar-token }}
+        SONAR_HOST_URL: ${{ inputs.sonar-host-url }}
+        GRADLE_TASK: ${{ inputs.gradle-task }}
+        ARGS_FILE: ${{ runner.temp }}/sonar-scan-args
+      run: |
+        set -euo pipefail
+
+        if [ ! -f ./gradlew ]; then
+          echo "::error::sonar-scan: no Gradle wrapper at '$PWD/gradlew'. Point working-directory at the Gradle project, or use scanner: cli if this is not a Gradle build."
+          exit 1
+        fi
+        [ -x ./gradlew ] || chmod +x ./gradlew
+
+        mapfile -t sonar_args < "$ARGS_FILE"
+        read -r -a tasks <<< "$GRADLE_TASK"
+
+        # --info matches what cnp-jenkins-library's builder.sonarScan() runs, and is
+        # what makes the plugin print the properties it resolved and the report URL.
+        ./gradlew --info \
+          "${tasks[@]+"${tasks[@]}"}" \
+          "${sonar_args[@]+"${sonar_args[@]}"}"
+
+    - name: Run the Maven Sonar plugin
+      id: maven-scan
+      if: inputs.scanner == 'maven'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SONAR_TOKEN: ${{ inputs.sonar-token }}
+        SONAR_HOST_URL: ${{ inputs.sonar-host-url }}
+        MAVEN_GOALS: ${{ inputs.maven-goals }}
+        ARGS_FILE: ${{ runner.temp }}/sonar-scan-args
+      run: |
+        set -euo pipefail
+
+        if [ -f ./mvnw ]; then
+          [ -x ./mvnw ] || chmod +x ./mvnw
+          maven=./mvnw
+        elif command -v mvn >/dev/null 2>&1; then
+          maven=mvn
+        else
+          echo "::error::sonar-scan: no Maven wrapper at '$PWD/mvnw' and no mvn on PATH. Point working-directory at the Maven project, or use scanner: cli if this is not a Maven build."
+          exit 1
+        fi
+
+        mapfile -t sonar_args < "$ARGS_FILE"
+        read -r -a goals <<< "$MAVEN_GOALS"
+
+        "$maven" --batch-mode \
+          "${goals[@]+"${goals[@]}"}" \
+          "${sonar_args[@]+"${sonar_args[@]}"}"
+
+    - name: Summarise the scan
+      id: summary
+      if: always()
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        SCANNER: ${{ inputs.scanner }}
+        SONAR_HOST_URL: ${{ inputs.sonar-host-url }}
+        QUALITY_GATE: ${{ inputs.quality-gate }}
+        QUALITY_GATE_TIMEOUT: ${{ inputs.quality-gate-timeout }}
+        GRADLE_TASK: ${{ inputs.gradle-task }}
+        MAVEN_GOALS: ${{ inputs.maven-goals }}
+        CLI_OUTCOME: ${{ steps.cli-scan.outcome }}
+        GRADLE_OUTCOME: ${{ steps.gradle-scan.outcome }}
+        MAVEN_OUTCOME: ${{ steps.maven-scan.outcome }}
+      run: |
+        set -euo pipefail
+
+        # Not a working-directory: on a bad working-directory input this step still runs,
+        # and must report the validation failure rather than fail on its own cd.
+        if [ -d "$WORKING_DIRECTORY" ]; then
+          cd "$WORKING_DIRECTORY"
+        fi
+
+        case "$SCANNER" in
+          cli) outcome="$CLI_OUTCOME"; mode="SonarScanner CLI" ;;
+          gradle) outcome="$GRADLE_OUTCOME"; mode="Gradle plugin, task \`${GRADLE_TASK}\`" ;;
+          maven) outcome="$MAVEN_OUTCOME"; mode="Maven plugin, goals \`${MAVEN_GOALS}\`" ;;
+          *) outcome="skipped"; mode="unknown scanner \`${SCANNER}\`" ;;
+        esac
+
+        dashboard_url=""
+        project_key=""
+        report=""
+        for candidate in .scannerwork/report-task.txt build/sonar/report-task.txt target/sonar/report-task.txt; do
+          if [ -f "$candidate" ]; then
+            report="$candidate"
+            break
+          fi
+        done
+
+        if [ -n "$report" ]; then
+          dashboard_url="$(sed -n 's/^dashboardUrl=//p' "$report" | head -n 1)"
+          project_key="$(sed -n 's/^projectKey=//p' "$report" | head -n 1)"
+        fi
+
+        echo "dashboard-url=${dashboard_url}" >> "$GITHUB_OUTPUT"
+
+        if [ "$QUALITY_GATE" = "true" ]; then
+          case "$outcome" in
+            success) gate="Passed" ;;
+            failure) gate="Not passed, or the scan failed before reaching the gate" ;;
+            *) gate="Not reached — the scan did not run" ;;
+          esac
+        else
+          gate="Not checked (\`quality-gate: false\`)"
+        fi
+
+        {
+          echo "### Sonar code quality scan"
+          echo ""
+          echo "| | |"
+          echo "|---|---|"
+          echo "| Scanner | ${mode} |"
+          echo "| Host | ${SONAR_HOST_URL} |"
+          if [ -n "$project_key" ]; then
+            echo "| Project | \`${project_key}\` |"
+          else
+            echo "| Project | not reported |"
+          fi
+          echo "| Quality gate | ${gate} |"
+          echo ""
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ -n "$dashboard_url" ]; then
+          echo "[Open the project on Sonar](${dashboard_url})" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        echo "" >> "$GITHUB_STEP_SUMMARY"
+
+        if [ -z "$report" ]; then
+          if [ "$outcome" = "skipped" ]; then
+            echo "The scan did not run, so nothing was analysed. An earlier step in this action failed — check its annotation." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No \`report-task.txt\` was written to \`.scannerwork/\`, \`build/sonar/\` or \`target/sonar/\`, so **nothing can be confirmed as analysed** and no dashboard link is available. Usually this means the scanner never started, or the Gradle or Maven task resolved to a no-op." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::sonar-scan: the scanner produced no report-task.txt, so this run cannot be confirmed to have analysed anything."
+          fi
+        fi
+
+        if [ "$outcome" = "failure" ] && [ "$QUALITY_GATE" = "true" ]; then
+          {
+            echo ""
+            echo "If the scan itself succeeded, the quality gate is what failed. The failing conditions are on the project's **Quality Gate** tab on Sonar; the step log ends with the gate status the scanner polled for. A timeout rather than a gate failure looks the same from here — \`quality-gate-timeout\` is currently ${QUALITY_GATE_TIMEOUT}s."
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
