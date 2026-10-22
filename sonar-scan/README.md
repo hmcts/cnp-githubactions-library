@@ -14,6 +14,13 @@ Gradle repos, `sonar-scanner <props>` for Yarn ones — and then blocks on
 is not `OK`. GitHub Actions has no equivalent, so repos have been assembling the
 pieces by hand. This action is that stage.
 
+The [reusable workflow](../.github/workflows/sonar-scan.md) wraps this action as a
+whole job and is the easier entrypoint for most repos: it takes the token through
+`secrets`, so callers need only `secrets: inherit`, does the full-history checkout
+for you, and can download a coverage artifact from an earlier job. Use this action
+directly when the scan has to share a job with your tests, needs setup steps, or runs
+in a matrix.
+
 One part of the Jenkins behaviour deliberately has no counterpart here.
 `SonarProperties.groovy` injects `sonar.pullrequest.key`, `.base`, `.branch` and
 `.provider=github` from Jenkins' `CHANGE_*` variables, because Jenkins has no

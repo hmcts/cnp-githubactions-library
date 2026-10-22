@@ -1,0 +1,176 @@
+name: Sonar code quality scan
+
+on:
+  workflow_call:
+    inputs:
+      scanner:
+        description: |
+          Which scanner to run: 'cli' for the standalone SonarScanner CLI, 'gradle' for
+          the org.sonarqube Gradle plugin, or 'maven' for sonar-maven-plugin. The CLI
+          scanner is not supported for Gradle or Maven projects, so this must match the
+          build.
+        required: false
+        type: string
+        default: 'cli'
+      sonar-host-url:
+        description: 'Sonar server to analyse against. Defaults to SonarQube Cloud. Set it to https://sonar.reform.hmcts.net/ for the self-hosted HMCTS server.'
+        required: false
+        type: string
+        default: 'https://sonarcloud.io'
+      working-directory:
+        description: 'Directory the scan runs from, and the project base directory for the CLI scanner.'
+        required: false
+        type: string
+        default: '.'
+      quality-gate:
+        description: 'Wait for the quality gate and fail the job when it does not pass, which is what waitForQualityGate() does on Jenkins.'
+        required: false
+        type: boolean
+        default: true
+      quality-gate-timeout:
+        description: |
+          How long to wait for the quality gate, in seconds. 1800 matches the 30-minute
+          timeout the Jenkins pipeline wraps waitForQualityGate() in. A string rather
+          than a number so the value reaching the scanner is exactly what you wrote.
+        required: false
+        type: string
+        default: '1800'
+      args:
+        description: 'Extra analysis properties, one -Dkey=value per line.'
+        required: false
+        type: string
+        default: ''
+      gradle-task:
+        description: "Gradle task to run. Use 'sonarqube' if the build wires coverage onto the deprecated task name instead of onto 'sonar'."
+        required: false
+        type: string
+        default: 'sonar'
+      maven-goals:
+        description: 'Maven goals to run.'
+        required: false
+        type: string
+        default: 'sonar:sonar'
+      create-project:
+        description: 'Create the Sonar project over the API before scanning, if it does not already exist. Needs a token permitted to create projects.'
+        required: false
+        type: boolean
+        default: false
+      properties-file:
+        description: 'Properties file create-project falls back to for the project key, name and organization. Relative to working-directory.'
+        required: false
+        type: string
+        default: 'sonar-project.properties'
+      project-key:
+        description: 'Project key to create. Takes precedence over sonar.projectKey in properties-file.'
+        required: false
+        type: string
+        default: ''
+      project-name:
+        description: 'Display name for a created project. Takes precedence over sonar.projectName in properties-file.'
+        required: false
+        type: string
+        default: ''
+      organization:
+        description: 'SonarQube Cloud organization a created project belongs to. Required by create-project on SonarQube Cloud only.'
+        required: false
+        type: string
+        default: ''
+      visibility:
+        description: "Visibility of a project created by create-project: 'public' or 'private'. A public project exposes a private repository's source and issues to anyone who can reach the Sonar host."
+        required: false
+        type: string
+        default: 'public'
+      coverage-artifact:
+        description: |
+          Name of an artifact holding the coverage report, downloaded before the scan.
+          Leave empty if coverage is committed, not needed, or produced in this job —
+          this workflow cannot run your tests, so a scan with no coverage report
+          records zero coverage rather than failing.
+        required: false
+        type: string
+        default: ''
+      coverage-path:
+        description: 'Directory the coverage artifact is extracted into. Must match the path your analysis properties name.'
+        required: false
+        type: string
+        default: '.'
+      java-version:
+        description: 'Java version to set up before scanning. Leave empty to skip JDK setup — the CLI scanner brings its own, but scanner: gradle and scanner: maven need one.'
+        required: false
+        type: string
+        default: ''
+      java-distribution:
+        description: 'Java distribution to set up, when java-version is given.'
+        required: false
+        type: string
+        default: 'temurin'
+      runner:
+        description: 'GitHub runner to use.'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      SONAR_TOKEN:
+        description: 'Sonar analysis token. Appears to be available at the hmcts org level, which would make `secrets: inherit` enough — confirm it is visible to your repository. Note a fork pull request gets no secrets at all, so the job fails by design there.'
+        required: true
+    outputs:
+      dashboard-url:
+        description: 'URL of the analysed project on the Sonar server. Empty when the scanner produced no report.'
+        value: ${{ jobs.sonar-scan.outputs.dashboard-url }}
+
+jobs:
+  sonar-scan:
+    name: Sonar code quality scan
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+    outputs:
+      dashboard-url: ${{ steps.sonar.outputs.dashboard-url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # Sonar needs the full history to blame issues to a commit and to work out
+          # which code is new. The composite action can only warn when the checkout is
+          # shallow, because the caller owns the checkout; here the workflow owns it,
+          # so the footgun is simply removed.
+          fetch-depth: 0
+
+      - name: Set up JDK
+        if: inputs.java-version != ''
+        uses: actions/setup-java@v5
+        with:
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ inputs.java-version }}
+
+      - name: Download coverage report
+        if: inputs.coverage-artifact != ''
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ inputs.coverage-artifact }}
+          path: ${{ inputs.coverage-path }}
+
+      - name: Sonar scan
+        id: sonar
+        # Pinned to @main — the library does not yet tag its own releases. Self-
+        # referenced by repository rather than as ./sonar-scan: a reusable workflow
+        # runs against the caller's checkout, where that path does not exist.
+        uses: hmcts/cnp-githubactions-library/sonar-scan@main
+        with:
+          sonar-token: ${{ secrets.SONAR_TOKEN }}
+          scanner: ${{ inputs.scanner }}
+          sonar-host-url: ${{ inputs.sonar-host-url }}
+          working-directory: ${{ inputs.working-directory }}
+          # Booleans render as the lowercase strings 'true' and 'false', which is what
+          # the action's input validation requires.
+          quality-gate: ${{ inputs.quality-gate }}
+          quality-gate-timeout: ${{ inputs.quality-gate-timeout }}
+          args: ${{ inputs.args }}
+          gradle-task: ${{ inputs.gradle-task }}
+          maven-goals: ${{ inputs.maven-goals }}
+          create-project: ${{ inputs.create-project }}
+          properties-file: ${{ inputs.properties-file }}
+          project-key: ${{ inputs.project-key }}
+          project-name: ${{ inputs.project-name }}
+          organization: ${{ inputs.organization }}
+          visibility: ${{ inputs.visibility }}
