@@ -44,18 +44,20 @@ inputs:
   args:
     description: |
       Extra analysis properties, one -Dkey=value per line. Passed to whichever scanner
-      runs. Keep each line a single plain -Dkey=value token: the CLI scan action rejects
-      shell metacharacters here.
+      runs. Quote any value containing spaces — '-Dsonar.projectName="My Project"' —
+      because the two paths split differently: the gradle and maven modes read the
+      lines as one argument each, while the CLI scanner re-splits them on whitespace,
+      so an unquoted space becomes two arguments there and one everywhere else.
     required: false
     default: ''
   gradle-task:
     description: |
       Gradle task to run. Use 'sonarqube' if the build wires coverage onto the deprecated
-      task name instead of onto 'sonar'.
+      task name instead of onto 'sonar'. Must not be empty.
     required: false
     default: 'sonar'
   maven-goals:
-    description: 'Maven goals to run.'
+    description: 'Maven goals to run. Must not be empty.'
     required: false
     default: 'sonar:sonar'
   create-project:
@@ -113,6 +115,8 @@ runs:
         QUALITY_GATE_TIMEOUT: ${{ inputs.quality-gate-timeout }}
         CREATE_PROJECT: ${{ inputs.create-project }}
         VISIBILITY: ${{ inputs.visibility }}
+        GRADLE_TASK: ${{ inputs.gradle-task }}
+        MAVEN_GOALS: ${{ inputs.maven-goals }}
         WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
@@ -138,7 +142,21 @@ runs:
         echo "::add-mask::$SONAR_TOKEN"
 
         case "$SCANNER" in
-          cli|gradle|maven) ;;
+          cli) ;;
+          gradle)
+            # An empty task leaves './gradlew --info' running Gradle's default task,
+            # which exits 0 having analysed nothing.
+            if [ -z "${GRADLE_TASK// /}" ]; then
+              echo "::error::sonar-scan: gradle-task is empty. Set it to the Sonar task — 'sonar', or 'sonarqube' on a build that still wires coverage onto the old name."
+              exit 1
+            fi
+            ;;
+          maven)
+            if [ -z "${MAVEN_GOALS// /}" ]; then
+              echo "::error::sonar-scan: maven-goals is empty. Set it to the Sonar goal, normally 'sonar:sonar'."
+              exit 1
+            fi
+            ;;
           *)
             echo "::error::sonar-scan: scanner must be one of cli, gradle or maven, got '$SCANNER'."
             exit 1
@@ -277,13 +295,23 @@ runs:
         # Execute-Analysis plus Provision-Projects token is refused by it — and a repo
         # that sets create-project on its default branch would then fail every build
         # once the project existed.
+        # A transport failure — DNS blip, TLS reset, a hung endpoint — must not kill the
+        # step: under 'set -e' the bare assignment would, with no annotation, which
+        # would defeat the rule that every unexpected answer here is only a warning.
+        # probe_code is set to 000 so callers treat it as "could not tell".
         probe_project() {
-          local probe
+          local probe status
           probe="$(curl -sS -G \
+            --connect-timeout 10 --max-time 60 \
             -w '\n%{http_code}' \
             -H "Authorization: Bearer ${SONAR_TOKEN}" \
             --data-urlencode "component=$1" \
-            "${api}/components/show")"
+            "${api}/components/show" 2>&1)" && status=0 || status=$?
+          if [ "$status" -ne 0 ]; then
+            probe_code="000"
+            probe_body="curl exit ${status}: ${probe}"
+            return 0
+          fi
           probe_code="$(printf '%s' "$probe" | tail -n 1)"
           probe_body="$(printf '%s' "$probe" | sed '$d')"
         }
@@ -306,6 +334,9 @@ runs:
             # Not fatal: a refusal here says nothing about whether the project exists,
             # and the create call below settles it either way.
             echo "::warning::sonar-scan: could not tell whether project '$key' exists — the Sonar API refused the lookup (HTTP $probe_code), which usually means the token has no Browse permission on it. Attempting to create it instead; an 'already exists' reply will be taken as success."
+            ;;
+          000)
+            echo "::warning::sonar-scan: could not reach the Sonar API to look up project '$key', so whether it exists is unknown. Attempting to create it instead. ${probe_body}"
             ;;
           *)
             echo "::warning::sonar-scan: could not look up project '$key' (HTTP $probe_code), so whether it exists is unknown. Attempting to create it instead. ${probe_body}"
@@ -354,26 +385,41 @@ runs:
             404)
               echo "No project at '$convention_key' either."
               ;;
+            000)
+              echo "::warning::sonar-scan: could not reach the Sonar API to check for a project keyed '$convention_key', so a duplicate cannot be ruled out. Proceeding to create '$key'. ${probe_body}"
+              ;;
             *)
               echo "::warning::sonar-scan: could not tell whether this repository already has a project keyed '$convention_key' (HTTP $probe_code), so a duplicate cannot be ruled out. Proceeding to create '$key'. ${probe_body}"
               ;;
           esac
         fi
 
+        # Refused rather than warned, because publishing is irreversible: re-running with
+        # visibility: private does not un-publish source, issues and measures that have
+        # already been world-readable, and a warning in a step log is easy to miss.
         if [ "$VISIBILITY" = "public" ] && [ "$REPO_PRIVATE" = "true" ]; then
-          echo "::warning::sonar-scan: about to create '$key' as a *public* Sonar project while this repository is private, so its source, issues and measures would be readable by anyone on ${SONAR_HOST_URL%/}. Set 'visibility: private' if that is not intended."
+          echo "::error::sonar-scan: refusing to create '$key' as a *public* Sonar project because this repository is private — its source, issues and measures would become readable by anyone who can reach ${SONAR_HOST_URL%/}, and that cannot be undone by a later run."
+          echo "::error::sonar-scan: set visibility explicitly: 'private' to match the repository, or 'public' if publishing a private repository's analysis really is intended. The default is public because that is the norm for HMCTS open-source repositories, so this is a decision the action will not make for you."
+          exit 1
         fi
 
         echo "Creating project '$key' (visibility: ${VISIBILITY})."
 
         create="$(curl -sS -X POST \
+          --connect-timeout 10 --max-time 60 \
           -w '\n%{http_code}' \
           -H "Authorization: Bearer ${SONAR_TOKEN}" \
           "${org_args[@]+"${org_args[@]}"}" \
           --data-urlencode "project=${key}" \
           --data-urlencode "name=${name}" \
           --data-urlencode "visibility=${VISIBILITY}" \
-          "${api}/projects/create")"
+          "${api}/projects/create" 2>&1)" && create_status=0 || create_status=$?
+
+        if [ "$create_status" -ne 0 ]; then
+          echo "::error::sonar-scan: could not reach the Sonar API to create project '$key' (curl exit ${create_status}). ${create}"
+          exit 1
+        fi
+
         create_code="$(printf '%s' "$create" | tail -n 1)"
         create_body="$(printf '%s' "$create" | sed '$d')"
 
@@ -400,6 +446,7 @@ runs:
         # endpoint is not available on every edition or plan.
         if [ -n "$DEFAULT_BRANCH" ]; then
           if curl -sS -f -X POST \
+               --connect-timeout 10 --max-time 60 \
                -H "Authorization: Bearer ${SONAR_TOKEN}" \
                --data-urlencode "project=${key}" \
                --data-urlencode "name=${DEFAULT_BRANCH}" \
@@ -418,8 +465,16 @@ runs:
         QUALITY_GATE_TIMEOUT: ${{ inputs.quality-gate-timeout }}
         EXTRA_ARGS: ${{ inputs.args }}
         ARGS_FILE: ${{ runner.temp }}/sonar-scan-args
+        MARKER_FILE: ${{ runner.temp }}/sonar-scan-started
       run: |
         set -euo pipefail
+
+        # Written immediately before the scan so the summary can tell this run's
+        # report-task.txt from one left behind by an earlier scan in the same job, by a
+        # coverage artifact that happened to include build/, or by an unclean
+        # self-hosted runner. A stale receipt would otherwise be read as a passing gate
+        # and linked as this run's dashboard.
+        : > "$MARKER_FILE"
 
         : > "$ARGS_FILE"
 
@@ -530,6 +585,7 @@ runs:
         CLI_OUTCOME: ${{ steps.cli-scan.outcome }}
         GRADLE_OUTCOME: ${{ steps.gradle-scan.outcome }}
         MAVEN_OUTCOME: ${{ steps.maven-scan.outcome }}
+        MARKER_FILE: ${{ runner.temp }}/sonar-scan-started
       run: |
         set -euo pipefail
 
@@ -546,15 +602,33 @@ runs:
           *) outcome="skipped"; mode="unknown scanner \`${SCANNER}\`" ;;
         esac
 
+        # GitHub records 'skipped' only for a step its own if: bypassed. A step skipped
+        # because an earlier one failed is absent from the steps context altogether, so
+        # the variable arrives empty — which means "never reached", same as skipped.
+        if [ -z "$outcome" ]; then
+          outcome="skipped"
+        fi
+
         dashboard_url=""
         project_key=""
         report=""
+        stale_report=""
         for candidate in .scannerwork/report-task.txt build/sonar/report-task.txt target/sonar/report-task.txt; do
           if [ -f "$candidate" ]; then
+            # Older than the marker written just before the scan, so it belongs to an
+            # earlier analysis, not this one. Treated as no report at all.
+            if [ -f "$MARKER_FILE" ] && [ ! "$candidate" -nt "$MARKER_FILE" ]; then
+              stale_report="$candidate"
+              continue
+            fi
             report="$candidate"
             break
           fi
         done
+
+        if [ -z "$report" ] && [ -n "$stale_report" ]; then
+          echo "::warning::sonar-scan: ignoring '$stale_report' — it predates this run, so it is a receipt from an earlier analysis rather than this one."
+        fi
 
         if [ -n "$report" ]; then
           dashboard_url="$(sed -n 's/^dashboardUrl=//p' "$report" | head -n 1)"
@@ -605,7 +679,6 @@ runs:
             echo "The scan did not run, so nothing was analysed. An earlier step in this action failed — check its annotation." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "No \`report-task.txt\` was written to \`.scannerwork/\`, \`build/sonar/\` or \`target/sonar/\`, so **nothing can be confirmed as analysed**, the quality gate was never evaluated, and no dashboard link is available. Usually this means the scanner never started, or the Gradle or Maven task resolved to a no-op — up to date, skipped, or disabled with \`sonar.skip=true\`. The step passing is not evidence to the contrary." >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::sonar-scan: the scanner produced no report-task.txt, so this run cannot be confirmed to have analysed anything and the quality gate was never evaluated."
           fi
         fi
 
@@ -614,4 +687,14 @@ runs:
             echo ""
             echo "If the scan itself succeeded, the quality gate is what failed. The failing conditions are on the project's **Quality Gate** tab on Sonar; the step log ends with the gate status the scanner polled for. A timeout rather than a gate failure looks the same from here — \`quality-gate-timeout\` is currently ${QUALITY_GATE_TIMEOUT}s."
           } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        # A requested gate that was never evaluated has to be a failure. On Jenkins
+        # waitForQualityGate() would have errored; a green run with no gate is the one
+        # outcome a repo moving off Jenkins must not silently inherit. Only when the scan
+        # itself did not fail — otherwise its own non-zero status already stands, and a
+        # second error here would just bury it.
+        if [ "$QUALITY_GATE" = "true" ] && [ -z "$report" ] && [ "$outcome" != "failure" ] && [ "$outcome" != "skipped" ]; then
+          echo "::error::sonar-scan: the quality gate was requested but never evaluated — the scanner produced no report-task.txt, so nothing was analysed and no gate decision exists. Likely causes: the Gradle or Maven task resolved to a no-op (up to date, or disabled with sonar.skip=true), the task or goal name does not match the one the build defines, or the scanner never started. Failing rather than passing, because waitForQualityGate() on Jenkins would have errored here too. Set 'quality-gate: false' if a non-blocking scan is genuinely what you want."
+          exit 1
         fi

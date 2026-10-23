@@ -13,11 +13,12 @@ Jenkins repos for free — `withSonarQubeEnv`, `builder.sonarScan()` and
 [composite action](../../sonar-scan/README.md) holds the logic; this workflow is a
 single job that calls it, adds the checkout, and takes the token through `secrets`.
 
-> **💡 This workflow cannot run your tests.** Sonar reads a coverage report off disk;
-> it does not produce one. Either upload the report from your test job and name it in
-> `coverage-artifact`, or use the [composite action](../../sonar-scan/README.md)
-> inside your own test job. A scan with no coverage report succeeds and records zero
-> coverage, which your quality gate may well pass.
+> **💡 Sonar does not build or test for you.** It reads compiled classes and a
+> coverage report off disk. Give `build-command` to produce them here, upload the
+> report from your test job and name it in `coverage-artifact`, or use the
+> [composite action](../../sonar-scan/README.md) inside the job that already builds.
+> A scan with no coverage report succeeds and records zero coverage, which your
+> quality gate may well pass.
 
 ## Features
 
@@ -82,40 +83,36 @@ jobs:
 ### Gradle repo on the self-hosted HMCTS server
 
 Gradle keeps its analysis properties in `build.gradle`, so there is nothing to point
-at a properties file. The JDK is this workflow's job, the coverage report is your
-build's.
+at a properties file. The `sonar` task needs compiled classes, which a bare checkout
+does not have, so give `build-command` — the job runs it in `working-directory`
+before the scan.
 
 ```yaml
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '21'
-      - run: ./gradlew build jacocoTestReport
-      - uses: actions/upload-artifact@v4
-        with:
-          name: jacoco
-          path: build/reports/jacoco/
-
   sonar:
-    needs: build
     uses: hmcts/cnp-githubactions-library/.github/workflows/sonar-scan.yaml@main
     with:
       scanner: gradle
       sonar-host-url: https://sonar.reform.hmcts.net/
       java-version: '21'
-      coverage-artifact: jacoco
-      coverage-path: build/reports/jacoco/
+      build-command: ./gradlew build jacocoTestReport
     secrets: inherit
 ```
 
-Note the Gradle scan re-runs the build on the scan runner, because the `sonar` task
-needs the compiled classes. If that is wasteful for your repo, put the composite
-action at the end of your build job instead.
+`build-command` is not optional in practice for `scanner: gradle` or `scanner:
+maven`. The job only checks the repository out, so without it the scanner analyses a
+tree with no compiled classes for `sonar.java.binaries` and no coverage report, and
+reports a thin result rather than failing. Jenkins avoids this by running
+`builder.build()` and `builder.test()` in the same workspace before its Sonar stage;
+`build-command` is that step.
+
+If your build already runs in an earlier job and you would rather not repeat it, use
+the [composite action](../../sonar-scan/README.md) at the end of that job instead —
+the compiled classes and the coverage report are already there.
+
+**Ordering:** `build-command` runs *before* the `coverage-artifact` download, so a
+command containing `clean` cannot wipe a report that was just unpacked. If you supply
+both, the build runs first and the artifact is laid down on top.
 
 ### Skipping the scan on fork pull requests
 
@@ -183,15 +180,17 @@ jobs:
 | `project-name` | Takes precedence over `sonar.projectName` | No | (empty) |
 | `organization` | Takes precedence over `sonar.organization`. Required by `create-project` on SonarQube Cloud only. | No | (empty) |
 | `visibility` | Visibility of a created project: `public` or `private` | No | `public` |
-| `coverage-artifact` | Artifact holding the coverage report, downloaded before the scan. Empty to skip. | No | (empty) |
+| `build-command` | Command that builds and tests the project, run in `working-directory` before the scan. Needed in practice by `scanner: gradle` and `scanner: maven`. | No | (empty) |
+| `coverage-artifact` | Artifact holding the coverage report, downloaded after `build-command` and before the scan. Empty to skip. | No | (empty) |
 | `coverage-path` | Directory the coverage artifact is extracted into | No | `.` |
 | `java-version` | Java version to set up. Empty skips JDK setup. | No | (empty) |
 | `java-distribution` | Java distribution, when `java-version` is given | No | `temurin` |
 | `runner` | GitHub runner to use | No | `ubuntu-latest` |
 
 Every input above is passed straight through to the composite action with the same
-default, except the last five, which are this workflow's own. The two forms therefore
-cannot drift.
+default, except the last six — `build-command`, `coverage-artifact`, `coverage-path`,
+`java-version`, `java-distribution` and `runner` — which are this workflow's own. The
+two forms therefore cannot drift.
 
 `quality-gate` and `create-project` are real booleans here, where the action takes
 strings; GitHub renders them as the lowercase `true`/`false` the action's validation

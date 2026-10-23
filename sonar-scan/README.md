@@ -43,8 +43,9 @@ only works properly from a full-history checkout.
   project all end green
 - Writes a run summary naming the scanner, host, project and gate decision, with a
   dashboard link, so a red run can be diagnosed from the Actions tab
-- Never reports a gate it did not see: with no scanner report the summary says the
-  gate was never evaluated rather than reading a zero exit status as a pass
+- Never reports a gate it did not see: when a gate was requested and the scanner left
+  no report — or only a stale one from an earlier analysis — the step fails rather
+  than reading a zero exit status as a pass
 
 ## Usage
 
@@ -205,7 +206,7 @@ Gradle keeps its analysis properties in `build.gradle`:
 | `working-directory` | no | `.` | Directory the scan runs from, and the CLI scanner's project base directory. |
 | `quality-gate` | no | `true` | Wait for the gate and fail the step when it does not pass. Must be `true` or `false`. |
 | `quality-gate-timeout` | no | `1800` | Seconds to wait for the gate. Matches the Jenkins 30-minute timeout. |
-| `args` | no | `''` | Extra analysis properties, one `-Dkey=value` per line. |
+| `args` | no | `''` | Extra analysis properties, one `-Dkey=value` per line. Quote values containing spaces — see [below](#args-splits-differently-per-scanner). |
 | `gradle-task` | no | `sonar` | Gradle task to run. |
 | `maven-goals` | no | `sonar:sonar` | Maven goals to run. |
 | `create-project` | no | `false` | Create the project over the API if it does not exist. Must be `true` or `false`. |
@@ -316,10 +317,17 @@ loses the race still ends green, because the project exists either way.
 
 `visibility` defaults to `public`, which matches the HMCTS SonarQube Cloud
 organisation. On a **private** repository that default would publish your source,
-issues and measures to anyone who can reach the Sonar host, so the action emits a
-warning naming that consequence when it is about to do it — set `visibility: private`
-instead. It only applies to projects this action creates; an existing project's
-visibility is never changed.
+issues and measures to anyone who can reach the Sonar host, so the action **refuses to
+proceed**: set `visibility` explicitly, to `private` to match the repository or to
+`public` if publishing a private repository's analysis really is intended. It applies
+only to projects this action creates; an existing project's visibility is never
+changed.
+
+This is the one place the action fails over a *default* rather than something you got
+wrong, and it is deliberate: the publication cannot be undone. Re-running with
+`visibility: private` does not retract source, issues and measures that have already
+been world-readable on sonarcloud.io, so a warning you might scroll past is not
+enough.
 
 The action also tries to set a newly created project's main branch to the
 repository's default branch, because a project created over the API otherwise takes
@@ -429,17 +437,52 @@ instead. Pointed at a JVM build it analyses source files without the compiled
 classes, dependencies or the build's resolved properties, and reports a thin,
 misleading result rather than failing. Set `scanner` to match the build.
 
-### No `report-task.txt` means nothing is confirmed
+### `args` splits differently per scanner
+
+One `-Dkey=value` per line, and quote any value containing spaces:
+
+```yaml
+          args: |
+            -Dsonar.projectName="My Project"
+            -Dsonar.exclusions=**/generated/**
+```
+
+The quoting matters because the two paths do not split alike. The `gradle` and
+`maven` modes read the lines with `mapfile`, so a line is one argument however many
+spaces it contains. The `cli` mode hands the block to
+`SonarSource/sonarqube-scan-action`, which parses it with `string-argv` and therefore
+re-splits on whitespace — so an unquoted `-Dsonar.projectName=My Project` is one
+property under `gradle` and two arguments under `cli`, the second of which the
+scanner rejects or misreads. Quoting makes both behave the same.
+
+(Earlier versions of the upstream action refused shell metacharacters here. v8.3.0
+does not — it tokenises rather than shelling out — so the only rule left is the
+splitting one.)
+
+### No `report-task.txt` fails the step when a gate was requested
 
 The summary step looks for the scanner's receipt in `.scannerwork/`, `build/sonar/`
-and `target/sonar/`. If there is none, the summary says so and the step emits a
-warning rather than claiming a clean scan — the usual causes are a Gradle or Maven
-task that resolved to a no-op (up to date, skipped, or disabled with
-`sonar.skip=true`), or a scanner that never started. Treat it as a scan that did not
-happen.
+and `target/sonar/`. If there is none, nothing was analysed — the usual causes are a
+Gradle or Maven task that resolved to a no-op (up to date, or disabled with
+`sonar.skip=true`), a task or goal name that does not match what the build defines,
+or a scanner that never started.
 
-The quality gate row reads **Never evaluated** in that case, even though the scan
-step exited zero. The gate verdict is otherwise inferred from the scan step's exit
-status, and a task that never contacted the server exits zero without a verdict to
-report; printing "Passed" there would be precisely the false assurance this action
-is meant to remove.
+With `quality-gate: true` that is a **failure**, not a warning: the quality gate row
+reads *Never evaluated*, an error annotation lists those causes, and the step exits
+non-zero even though the scan command itself exited zero. On Jenkins
+`waitForQualityGate()` would have errored in the same situation, and a green build
+with no gate is the one thing a repo moving off Jenkins must not silently inherit. If
+a non-blocking scan is genuinely what you want, say so with `quality-gate: false` —
+then a missing report is reported in the summary and left green.
+
+The gate verdict is otherwise inferred from the scan step's exit status, so this is
+also what stops a task that never contacted the server from being printed as
+"Passed".
+
+**Receipts have to be this run's.** Before scanning, the action writes a marker file
+under `$RUNNER_TEMP`, and the summary ignores any `report-task.txt` older than it.
+Without that check a receipt left by an earlier scan in the same job, a
+`coverage-artifact` that happened to include `build/`, or an unclean self-hosted
+runner would be read as a passing gate and linked as this run's dashboard. A stale
+receipt is announced in a warning and then treated as no report at all — which, with
+`quality-gate: true`, fails the step.

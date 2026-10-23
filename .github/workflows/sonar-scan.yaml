@@ -80,6 +80,18 @@ on:
         required: false
         type: string
         default: 'public'
+      build-command:
+        description: |
+          Shell command that builds and tests the project, run in working-directory
+          before the scan. The gradle and maven scanners need compiled classes and a
+          coverage report that only the build produces — this workflow checks out a
+          bare tree, so without this they analyse nothing useful. Jenkins does the
+          equivalent with builder.build() and builder.test() in the same workspace.
+          Any toolchain beyond java-version must already be on the runner; use the
+          composite action in your own job if you need setup steps.
+        required: false
+        type: string
+        default: ''
       coverage-artifact:
         description: |
           Name of an artifact holding the coverage report, downloaded before the scan.
@@ -142,6 +154,15 @@ jobs:
         with:
           distribution: ${{ inputs.java-distribution }}
           java-version: ${{ inputs.java-version }}
+
+      # Before the coverage download on purpose: a build-command containing 'clean', or
+      # anything else that empties build/, would otherwise delete the report that was
+      # just unpacked into it.
+      - name: Build
+        if: inputs.build-command != ''
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.build-command }}
 
       - name: Download coverage report
         if: inputs.coverage-artifact != ''
