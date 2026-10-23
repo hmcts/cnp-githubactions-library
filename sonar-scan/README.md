@@ -329,6 +329,64 @@ branch; that call is best effort and only warns if it fails.
 Gate `create-project` on the default branch, as in the example above. Running it on
 every pull request is wasted API calls against a project that will already exist.
 
+### `create-project` refuses to give a repository a second project
+
+Any repo with the SonarCloud GitHub App installed also gets **Automatic Analysis**, a
+scan SonarQube Cloud runs by itself. It auto-creates its own project, keyed
+`<organization>_<repo-name>`, and takes no notice of your `sonar.projectKey`. The
+pipeline, meanwhile, publishes to whatever that key says. When the two disagree, one
+repository ends up with two Sonar projects — and the DevOps Platform binding that
+drives pull-request decoration usually sits on the Automatic Analysis one, which is
+source-only and so reports 0% coverage, leaving the pipeline-fed project with all the
+real data and no binding. Symptoms are a `SonarCloud Code Analysis` check failing on
+files your pipeline never scans, or no PR comment at all even though your own scan and
+quality gate passed.
+
+Most HMCTS repos do not match the convention and so are exposed to this:
+`cath-service` declares `hmcts.cath` where Automatic Analysis would make
+`hmcts_cath-service`; `pcs-api` declares `uk.gov.hmcts.reform:pcs-api-2`;
+`pt-frontend` declares `pt-frontend`. Of the repos in the workspace only
+`ccd-case-ui-toolkit` happens to line up.
+
+So before creating anything, `create-project` checks both keys:
+
+1. The declared key. If that project exists, there is nothing to do and the step
+   succeeds, as always.
+2. If — and only if — that came back a definite `404`, the convention key,
+   `<organization>_<repo-name>`. If a project exists there and it is not the declared
+   key, the step **fails** rather than creating a second one, and tells you to point
+   `sonar.projectKey` at the project that already exists — or to have an org admin
+   disable Automatic Analysis for the repository, so there is only one project to
+   satisfy.
+3. Neither exists: the declared key is created, with no commentary.
+
+The check is skipped, with a line in the log saying why, when the host is not
+SonarQube Cloud (Automatic Analysis is a SonarQube Cloud feature, so the convention
+key means nothing on the self-hosted server), when no organization has been resolved,
+or when the event payload carries no repository name — it will not guess at the key.
+
+It is also skipped when the first lookup was refused or errored rather than
+answering `404`. `api/components/show` returns `404` for a component that does not
+exist, so a `403` on the declared key means it most likely *does* exist and the token
+simply cannot browse it. There is then nothing to create, and failing would hand you
+the wrong instruction: abandon a project that exists — probably the one your pipeline
+has been feeding coverage to — in favour of the autoscan twin. The step falls through
+to the create attempt instead, gets `already exists` back, and ends green, which is
+what it did before this check existed. A refused probe on the *convention* key is
+likewise only a warning.
+
+**What this does not catch.** It probes by key, so it only finds an autoscan-shaped
+twin. A project someone created by hand years ago under a third, unrelated key is
+invisible to it, and you can still end up with two. The complete answer is to ask
+which project holds the DevOps Platform binding for this repository, rather than
+guessing at keys — but that lookup is unverified on SonarQube Cloud and most likely
+needs project-admin permission, well beyond the analysis token this action is given,
+so it is deliberately not attempted.
+
+Full write-up of the underlying problem: *SonarCloud "Automatic Analysis" creates a
+second, separate project* in `docs/how-to/troubleshooting.md` in
+[`hmcts/cft-workspace`](https://github.com/hmcts/cft-workspace).
+
 ### The `only_deploy` label
 
 The Jenkins pipeline skips the Sonar stage when a PR carries `only_deploy`. There is

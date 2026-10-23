@@ -213,6 +213,15 @@ visible to your repository before relying on that.
 permission from the Execute Analysis a scan needs. The org-level token may not carry
 it; see the [action's README](../../sonar-scan/README.md#create-project-needs-more-than-an-analysis-token).
 
+`create-project` will also refuse to give a repository a *second* Sonar project. If
+the declared key does not exist but `<organization>_<repo-name>` does — the key
+SonarQube Cloud's Automatic Analysis invents for any repo with the SonarCloud GitHub
+App installed — the job fails and tells you to point `sonar.projectKey` at the
+existing project, or to have Automatic Analysis disabled for the repository. Two
+projects for one repo is how you end up with PR decoration bound to a source-only
+scan reporting 0% coverage. Detail, and the limits of the check, are in the
+[action's README](../../sonar-scan/README.md#create-project-refuses-to-give-a-repository-a-second-project).
+
 The workflow passes the token to the underlying action as an input, because GitHub
 does not expose the `secrets` context to composite actions. Callers pass no token of
 any kind beyond `secrets: inherit`.
