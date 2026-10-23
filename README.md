@@ -22,6 +22,7 @@ See [Workflow or action?](#workflow-or-action) for which to pick.
 | **Terraform deploy** | Runs `terraform plan` and optionally `apply` against the HMCTS state storage backend, and comments the plan on the PR. | [docs](.github/workflows/terraform-deploy.md) | [docs](terraform-deploy/README.md) |
 | **Terraform deploy (OIDC)** | The same, authenticating to Azure with workload identity federation. | [docs](.github/workflows/terraform-deploy-openId.md) | [docs](terraform-deploy-openid/README.md) |
 | **Terraform format check** | Fails the build when Terraform files are not `terraform fmt` clean, using the repo's `.terraform-version`. | | [docs](terraform-fmt/README.md) |
+| **Sonar code quality scan** | Runs a Sonar analysis with the CLI, Gradle or Maven scanner and fails the build when the quality gate does not pass. | [docs](.github/workflows/sonar-scan.md) | [docs](sonar-scan/README.md) |
 | **PR label check** | Applies a release label from the PR title's Conventional Commits prefix, then enforces that one is present. | [docs](.github/workflows/label-check.md) | |
 | **Release drafter** | Keeps a draft GitHub release up to date from merged PR titles and labels, for a human to publish. | [template](.github/workflows/release-drafter.md) | |
 | **Update changelog** | Prepends a version section to `CHANGELOG.md` in Keep a Changelog format and commits it back. | [docs](.github/workflows/update-changelog.md) | [docs](update-changelog/README.md) |
