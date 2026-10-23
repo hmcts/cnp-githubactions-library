@@ -6,7 +6,10 @@ inputs:
   sonar-token:
     description: |
       Sonar analysis token. GitHub does not expose the secrets context to composite
-      actions, so it has to arrive as an explicit input, e.g. ${{ secrets.SONAR_TOKEN }}.
+      actions, so it has to arrive as an explicit input — pass `secrets.SONAR_TOKEN`
+      from the calling workflow. Note that action metadata is template-evaluated, so
+      this text must not contain an expression; writing the secrets reference in
+      braces here makes the whole action fail to load.
     required: true
   scanner:
     description: |
