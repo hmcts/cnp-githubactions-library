@@ -166,7 +166,7 @@ jobs:
 
       - name: Download coverage report
         if: inputs.coverage-artifact != ''
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.coverage-artifact }}
           path: ${{ inputs.coverage-path }}
