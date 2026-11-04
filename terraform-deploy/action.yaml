@@ -87,10 +87,26 @@ runs:
 
         echo "product=$PRODUCT" >> "$GITHUB_OUTPUT"
 
+    # setup-terraform v4 dropped terraform_version_file, so the version has to be read here and
+    # passed as terraform_version. Leaving the old input in place does not fail the step - it is
+    # reported as "Unexpected input(s)" and ignored - which is worse: the pinned version is
+    # silently discarded and the runner installs whatever the action defaults to.
+    - name: Read pinned Terraform version
+      id: terraform-version
+      shell: bash
+      run: |
+        VERSION_FILE="${{ inputs.working-directory }}/.terraform-version"
+        if [[ -f "$VERSION_FILE" ]]; then
+          echo "version=$(tr -d '[:space:]' < "$VERSION_FILE")" >> "$GITHUB_OUTPUT"
+        else
+          echo "No $VERSION_FILE; using the action's default Terraform version."
+          echo "version=" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v4
       with:
-        terraform_version_file: ${{ inputs.working-directory }}/.terraform-version
+        terraform_version: ${{ steps.terraform-version.outputs.version }}
         terraform_wrapper: false
 
     - name: Azure Login
